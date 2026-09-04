@@ -1,130 +1,112 @@
-# Current Task: Implement Core Rust Backend
+# Current Task: Implement Chrome MV3 Extension
 
 ## Goal
-Make the Crixata Tauri desktop app functional as a local server that can receive policy text from the extension, grade it (using a local SLM), and cache results in SQLite. This task focuses on the Rust backend and a minimal working frontend.
+Build a complete Chrome Manifest V3 extension that detects ToS/Privacy Policy pages, extracts policy text, calls the local Crixata desktop app API, and displays the grade in the toolbar badge and popup.
 
 ## Context
 - Project root: `/home/honeysh/projects/Crixata`
-- Desktop app: `apps/desktop/`
+- Extension location: `apps/extension/`
+- Desktop app local API: `http://127.0.0.1:4343`
+- API endpoints: `GET /health`, `POST /grade`
 - Docs: `docs/PRD.md`, `docs/ARCHITECTURE.md`
-- Extension will be implemented in a later task.
 
 ## Requirements
 
-### 1. Configuration (`apps/desktop/src-tauri/src/config.rs`)
-- Define `AppConfig` with methods returning:
-  - `cache_db_path()` — SQLite path in app data dir.
-  - `model_dir()` — directory for the downloaded GGUF model.
-  - `model_path()` — path to `Llama-3.2-3B-Instruct.Q4_K_M.gguf`.
-  - `llama_server_bin_path()` — path to downloaded `llama-server` executable.
-  - `server_port` and `llama_server_port` defaults (e.g., 4343 and 4344).
-- Use `dirs::data_dir()` / `dirs::data_local_dir()` for cross-platform paths.
-- Create directories on first use.
+### 1. Fix Manifest and Build Layout
+- Update `apps/extension/manifest.json` to reference built files at the root of `dist/` (not `src/`):
+  - `"default_popup": "popup.html"`
+  - `"service_worker": "background.js"`
+  - content script: `"js": ["content.js"]`
+- Update `apps/extension/vite.config.ts` so the build outputs:
+  - `dist/popup.html`
+  - `dist/background.js`
+  - `dist/content.js`
+  - `dist/icons/` copied from `apps/extension/icons/`
+  - `dist/manifest.json` copied from `apps/extension/manifest.json`
+  - CSS/JS assets under `dist/assets/` or similar.
+- Add a `copy-manifest-and-icons` npm script or use a Vite plugin to copy statics.
 
-### 2. Model Download Manager (`apps/desktop/src-tauri/src/model.rs`)
-- Implement `ModelManager` that can:
-  - Check whether the model file exists locally.
-  - Download the GGUF model from Hugging Face with progress reporting:
-    - URL: `https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf`
-    - (Accept a model URL config option; the above is the default.)
-  - Report download progress as percentage.
-  - Resume interrupted downloads if possible (range requests optional; nice-to-have).
-  - Download the appropriate pre-compiled `llama-server` binary from the official llama.cpp releases on GitHub into the app data dir, based on target triple:
-    - Linux x86_64: `llama-server-x86_64-unknown-linux-gnu`
-    - Linux aarch64: `llama-server-aarch64-unknown-linux-gnu`
-    - macOS x86_64: `llama-server-x86_64-apple-darwin`
-    - macOS aarch64: `llama-server-aarch64-apple-darwin`
-    - Windows x86_64: `llama-server-x86_64-pc-windows-msvc.exe`
-    - Map target triple to a release asset URL.
-    - Mark the binary executable on Unix.
+### 2. Policy Detection (`src/detector.ts`)
+Implement heuristics to decide whether a page is a Terms of Service or Privacy Policy page.
 
-### 3. Sidecar Manager (`apps/desktop/src-tauri/src/sidecar.rs`)
-- Rewrite `SidecarManager` to:
-  - Spawn `llama-server` using `std::process::Command` (not Tauri sidecar feature for now).
-  - Args: `-m <model_path> --port <port> -c 4096 --host 127.0.0.1`
-  - Wait for `/health` endpoint to respond before marking `Ready`.
-  - Stop/kill the process on app exit.
-  - Restart on failure up to a max retry count.
-- Keep health-check logic.
+Check in order:
+- URL path contains one of: `privacy`, `privacypolicy`, `privacy-policy`, `tos`, `terms`, `terms-of-service`, `terms-of-use`, `legal`, `eula`, `user-agreement`, `conditions`.
+- Page `<title>` contains: `Privacy Policy`, `Terms of Service`, `Terms of Use`, `Terms and Conditions`, `Legal`, `Cookie Policy`.
+- DOM: look for links on the page whose text or href matches the above keywords (use a content script message to get these).
 
-### 4. SQLite Cache (`apps/desktop/src-tauri/src/cache.rs`)
-- Schema:
-  ```sql
-  CREATE TABLE IF NOT EXISTS grades (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      domain TEXT NOT NULL,
-      policy_url TEXT NOT NULL,
-      policy_hash TEXT,
-      grade TEXT NOT NULL,
-      summary_json TEXT NOT NULL,
-      source TEXT NOT NULL, -- 'llm' or 'cache'
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      UNIQUE(domain, policy_url)
-  );
-  CREATE INDEX IF NOT EXISTS idx_domain ON grades(domain);
-  ```
-- Implement:
-  - `CacheManager::open(path)` / `CacheManager::in_memory()`.
-  - `get_grade(domain, policy_url)` → optional grade record.
-  - `upsert_grade(domain, policy_url, policy_hash, grade, summary, source)`.
-  - `list_recent(limit)`.
+Return a confidence object:
+```ts
+interface DetectionResult {
+  isPolicyPage: boolean;
+  policyType: 'privacy' | 'terms' | 'cookie' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+}
+```
 
-### 5. Local HTTP Server (`apps/desktop/src-tauri/src/server.rs`)
-- Use `tiny_http`.
-- Endpoints:
-  - `GET /health` → JSON `{ "status": "ok", "sidecar_ready": bool, "model_downloaded": bool }`.
-  - `POST /grade` → accepts `{ "url", "title", "text" }`, returns grade response.
-- `/grade` flow:
-  1. Validate `url` and `text` are non-empty.
-  2. Derive domain from URL.
-  3. Check cache; return cached result if found.
-  4. If not cached and sidecar is ready, call the LLM extraction function.
-  5. Compute grade from extracted summary.
-  6. Store in cache and return.
-- CORS: allow `chrome-extension://*` origins.
+### 3. Content Script (`src/content.ts`)
+- Extract the main readable text from the page body.
+- Remove script/style/nav/footer/header/aside elements where appropriate.
+- Trim and limit text to ~15,000 characters (send the first N chars if longer).
+- Listen for messages from the service worker:
+  - `action: "extract-text"` → returns `{ text: string, title: string, url: string }`.
+  - `action: "scan-links"` → returns candidate policy links found in the page.
 
-### 6. LLM Extraction Stub (`apps/desktop/src-tauri/src/llm.rs` — new file)
-- Define the strict extraction schema types.
-- Implement `extract_policy_summary(text: &str, client: &reqwest::Client, port: u16) -> Result<Summary>`.
-- For now, implement the prompt and call `/completion` on the local llama-server.
-- Use a GBNF grammar string passed in the request body (`grammar` field) to constrain output.
-- If the sidecar is not ready or model is missing, return a clear error.
-- The actual GBNF grammar file can live at `apps/desktop/src-tauri/resources/policy_schema.gbnf`.
+### 4. Service Worker (`src/background.ts`)
+- On tab update (`chrome.tabs.onUpdated`), when status is `complete`:
+  - Use `chrome.scripting.executeScript` to call the content script and detect/scan.
+  - If a policy page is detected, extract text.
+  - Call `GET http://127.0.0.1:4343/health`.
+  - If desktop app is healthy, call `POST http://127.0.0.1:4343/grade` with `{ url, title, text }`.
+  - Update the tab's badge with the grade (A/B/C/D) and a badge color:
+    - A → green (`#22c55e`)
+    - B → blue (`#3b82f6`)
+    - C → orange (`#f97316`)
+    - D → red (`#ef4444`)
+    - Unknown / error / no app → gray (`#6b7280`) or "?"
+- Store the last grade result per tab in `chrome.storage.session` (or `local` if session unavailable) so the popup can read it instantly.
+- Throttle: do not re-grade the same URL more than once per 5 minutes unless the user clicks the popup.
 
-### 7. Grading Logic (`apps/desktop/src-tauri/src/grade.rs`)
-- Define `Summary` struct matching the JSON schema in `docs/ARCHITECTURE.md`.
-- Implement `compute_grade(summary: &Summary) -> char` with the rubric from the architecture doc.
-- Grade is deterministic based on extracted fields.
+### 5. Popup (`src/popup.html`, `src/popup.ts`, `src/popup.css`)
+- Query the active tab's stored grade result.
+- Display:
+  - Large grade badge (A/B/C/D/?).
+  - Domain / policy URL.
+  - Summary breakdown: data collected, data used for, third-party sharing, retention, user rights, tracking/ads, arbitration/class-action waiver, clarity notes.
+  - Source label: "Analyzed locally" or "From cache".
+  - A prominent privacy disclaimer: *"No user data, browsing history, or policy content is ever tracked, collected, or sent to a remote server."*
+- Show a "Desktop app not running" state if `/health` fails, with instructions to launch Crixata.
+- Add a "Re-analyze this page" button.
 
-### 8. Wiring (`apps/desktop/src-tauri/src/lib.rs`)
-- Construct config, cache, sidecar manager, and start the local server.
-- Add Tauri commands:
-  - `get_app_status()`
-  - `download_model()` with progress events (emit `model-download-progress` events).
-  - `get_download_status()`
-- Ensure the sidecar is started only after the model exists (or at least model file is present).
-- On app shutdown, stop the sidecar.
+### 6. API Client (`src/api.ts`)
+- Strongly typed functions:
+  - `checkHealth(): Promise<HealthResponse>`
+  - `gradePolicy(req: GradeRequest): Promise<GradeResponse>`
+- Handle network errors gracefully (app not running).
 
-### 9. Minimal Frontend (`apps/desktop/src/`)
-- Show the privacy disclaimer.
-- Show app status (sidecar, model, cache).
-- Button to trigger model download with progress bar.
-- Display the local API port.
+### 7. Badge Helper (`src/badge.ts`)
+- `setBadge(tabId, grade)` updates badge text and color.
+- `clearBadge(tabId)` resets to "?" or empty.
 
-### 10. Build Verification
-- `cd apps/desktop && npm run tauri dev` must compile and start without errors.
-- If `llama-server` or model is missing, the app should gracefully show download UI instead of crashing.
-- `cargo check` should pass.
+### 8. Type Safety
+- Use types from `packages/cache-schema/types.ts` for `Summary`.
+- Add local `src/types.ts` for extension-specific types.
+
+### 9. Build and Load Verification
+- `npm run build` in `apps/extension/` must produce a valid `dist/` folder.
+- The extension must be loadable in Chrome as an unpacked extension from `dist/`.
+- No TypeScript errors.
+
+### 10. Privacy Disclaimer
+- Must be visible in the popup.
+- Must not initiate any network requests except to `127.0.0.1:4343` and to fetch the current page's text.
 
 ## Deliverables
-- All Rust modules implemented and compiling.
-- Frontend status/download page functional.
-- Local HTTP server responds to `/health`.
+- Complete extension source under `apps/extension/src/`.
+- Valid `apps/extension/manifest.json`.
+- Working Vite build that produces a loadable `dist/`.
 - Commit and push to `origin/main`.
 
 ## Notes
-- Do **not** commit the downloaded `llama-server` binary or GGUF model.
-- Do **not** implement the browser extension yet; only the desktop backend.
-- Use the existing skeleton files where they exist; rewrite if needed.
-- Keep error handling explicit with `anyhow`/`thiserror`.
+- Do not implement the cache-sync backend in this task; only the extension.
+- Keep the popup lightweight; it should read from storage, not re-call the API on every open.
+- Handle MV3 service worker lifecycle: global state will be lost, so rely on `chrome.storage`.
