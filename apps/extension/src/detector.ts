@@ -1,50 +1,31 @@
-export type PolicyType = 'privacy_policy' | 'terms_of_service' | 'cookie_policy' | 'other';
+import type { DetectionResult, PolicyType, Confidence, CandidateLink } from './types';
 
-export interface DetectionResult {
-  isPolicy: boolean;
-  policyType?: PolicyType;
-  confidence: number;
-  reason: string;
-}
+export type { DetectionResult, PolicyType, Confidence };
 
-const PRIVACY_URL_PATTERNS = [
-  /\/privacy(?:[-_]?(?:policy|notice|statement|info))?/i,
-  /\/data[-_]?protection/i,
-  /\/legal\/privacy/i,
-];
+export const POLICY_URL_KEYWORDS = [
+  'privacy-policy',
+  'privacypolicy',
+  'privacy',
+  'terms-of-service',
+  'terms-of-use',
+  'terms',
+  'tos',
+  'user-agreement',
+  'conditions',
+  'eula',
+  'legal',
+  'cookie-policy',
+  'cookie',
+] as const;
 
-const TERMS_URL_PATTERNS = [
-  /\/terms(?:[-_]?(?:of[-_]?(?:service|use)|and[-_]?conditions))?/i,
-  /\/tos(?:[-_]?(?:and[-_]?conditions))?/i,
-  /\/user[-_]?agreement/i,
-  /\/conditions[-_]?of[-_]?(?:use|sale)/i,
-  /\/legal\/terms/i,
-];
-
-const COOKIE_URL_PATTERNS = [
-  /\/cookie(?:[-_]?(?:policy|notice|statement))?/i,
-  /\/legal\/cookies/i,
-];
-
-const PRIVACY_TITLE_PATTERNS = [
-  /privacy\s+policy/i,
-  /privacy\s+notice/i,
-  /privacy\s+statement/i,
-  /data\s+protection\s+notice/i,
-];
-
-const TERMS_TITLE_PATTERNS = [
-  /terms\s+of\s+service/i,
-  /terms\s+of\s+use/i,
-  /terms\s+and\s+conditions/i,
-  /user\s+agreement/i,
-  /conditions\s+of\s+use/i,
-];
-
-const COOKIE_TITLE_PATTERNS = [
-  /cookie\s+policy/i,
-  /cookie\s+notice/i,
-];
+export const POLICY_TITLE_KEYWORDS = [
+  'Privacy Policy',
+  'Terms of Service',
+  'Terms of Use',
+  'Terms and Conditions',
+  'Legal',
+  'Cookie Policy',
+] as const;
 
 /**
  * Normalizes and extracts root domain from a URL.
@@ -59,62 +40,110 @@ export function extractDomain(urlStr: string): string {
 }
 
 /**
- * Evaluates whether a URL and optional page title represent a legal policy page.
+ * Maps a keyword or string to policy type: 'privacy' | 'terms' | 'cookie' | 'unknown'.
  */
-export function detectPolicyPage(urlStr: string, title: string = ''): DetectionResult {
+export function classifyKeyword(keyword: string): PolicyType {
+  const k = keyword.toLowerCase();
+  if (k.includes('cookie')) {
+    return 'cookie';
+  }
+  if (k.includes('privacy')) {
+    return 'privacy';
+  }
+  if (
+    k.includes('term') ||
+    k.includes('tos') ||
+    k.includes('eula') ||
+    k.includes('condition') ||
+    k.includes('agreement') ||
+    k.includes('legal')
+  ) {
+    return 'terms';
+  }
+  return 'unknown';
+}
+
+/**
+ * Heuristic policy detector checking URL path, title, and DOM links in order.
+ */
+export function detectPolicyPage(
+  urlStr: string,
+  title: string = '',
+  links?: CandidateLink[] | Array<{ text: string; href: string }>
+): DetectionResult {
   try {
     const url = new URL(urlStr);
-    // Ignore internal chrome/about/file pages
+    // Ignore non-web protocol pages
     if (!['http:', 'https:'].includes(url.protocol)) {
-      return { isPolicy: false, confidence: 0, reason: 'Non-web protocol' };
+      return { isPolicyPage: false, policyType: 'unknown', confidence: 'low' };
     }
 
     const path = url.pathname.toLowerCase();
-    const search = url.search.toLowerCase();
-    const fullTarget = `${path}${search}`;
 
-    // 1. Check URL patterns
-    for (const pattern of PRIVACY_URL_PATTERNS) {
-      if (pattern.test(fullTarget)) {
-        return { isPolicy: true, policyType: 'privacy_policy', confidence: 0.95, reason: 'URL matches privacy policy path' };
+    // 1. Check URL path
+    for (const kw of POLICY_URL_KEYWORDS) {
+      if (path.includes(kw)) {
+        return {
+          isPolicyPage: true,
+          policyType: classifyKeyword(kw),
+          confidence: 'high',
+        };
       }
     }
 
-    for (const pattern of TERMS_URL_PATTERNS) {
-      if (pattern.test(fullTarget)) {
-        return { isPolicy: true, policyType: 'terms_of_service', confidence: 0.95, reason: 'URL matches terms path' };
-      }
-    }
-
-    for (const pattern of COOKIE_URL_PATTERNS) {
-      if (pattern.test(fullTarget)) {
-        return { isPolicy: true, policyType: 'cookie_policy', confidence: 0.90, reason: 'URL matches cookie policy path' };
-      }
-    }
-
-    // 2. Check title patterns if URL was not definitive
+    // 2. Check Page <title>
     if (title) {
-      for (const pattern of PRIVACY_TITLE_PATTERNS) {
-        if (pattern.test(title)) {
-          return { isPolicy: true, policyType: 'privacy_policy', confidence: 0.85, reason: 'Title matches privacy policy' };
-        }
-      }
-
-      for (const pattern of TERMS_TITLE_PATTERNS) {
-        if (pattern.test(title)) {
-          return { isPolicy: true, policyType: 'terms_of_service', confidence: 0.85, reason: 'Title matches terms of service' };
-        }
-      }
-
-      for (const pattern of COOKIE_TITLE_PATTERNS) {
-        if (pattern.test(title)) {
-          return { isPolicy: true, policyType: 'cookie_policy', confidence: 0.80, reason: 'Title matches cookie policy' };
+      const titleLower = title.toLowerCase();
+      for (const kw of POLICY_TITLE_KEYWORDS) {
+        if (titleLower.includes(kw.toLowerCase())) {
+          return {
+            isPolicyPage: true,
+            policyType: classifyKeyword(kw),
+            confidence: 'medium',
+          };
         }
       }
     }
 
-    return { isPolicy: false, confidence: 0, reason: 'No policy patterns matched' };
+    // 3. DOM: look for links on the page whose text or href matches the keywords
+    if (links && links.length > 0) {
+      for (const link of links) {
+        const linkText = (link.text || '').toLowerCase();
+        const linkHref = (link.href || '').toLowerCase();
+
+        for (const kw of POLICY_URL_KEYWORDS) {
+          if (linkText.includes(kw) || linkHref.includes(kw)) {
+            return {
+              isPolicyPage: true,
+              policyType: classifyKeyword(kw),
+              confidence: 'low',
+            };
+          }
+        }
+
+        for (const kw of POLICY_TITLE_KEYWORDS) {
+          const kwLower = kw.toLowerCase();
+          if (linkText.includes(kwLower) || linkHref.includes(kwLower)) {
+            return {
+              isPolicyPage: true,
+              policyType: classifyKeyword(kw),
+              confidence: 'low',
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      isPolicyPage: false,
+      policyType: 'unknown',
+      confidence: 'low',
+    };
   } catch {
-    return { isPolicy: false, confidence: 0, reason: 'Invalid URL' };
+    return {
+      isPolicyPage: false,
+      policyType: 'unknown',
+      confidence: 'low',
+    };
   }
 }

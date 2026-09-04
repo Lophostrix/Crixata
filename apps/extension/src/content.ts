@@ -1,10 +1,26 @@
-/**
- * Crixata Content Script
- * Extracts policy text from web pages for local grading.
- */
+import type { ExtractedPageText, CandidateLink } from './types';
 
+const POLICY_KEYWORDS = [
+  'privacy-policy',
+  'privacypolicy',
+  'privacy',
+  'terms-of-service',
+  'terms-of-use',
+  'terms',
+  'tos',
+  'user-agreement',
+  'conditions',
+  'eula',
+  'legal',
+  'cookie',
+];
+
+/**
+ * Extracts clean readable text from document body.
+ * Strips script, style, nav, footer, header, aside, and non-content elements.
+ * Normalizes whitespace and limits text to ~15,000 characters.
+ */
 function cleanDocumentText(): string {
-  // Find primary article or main container if available
   const container =
     document.querySelector('main') ||
     document.querySelector('article') ||
@@ -15,7 +31,6 @@ function cleanDocumentText(): string {
 
   const clone = container.cloneNode(true) as HTMLElement;
 
-  // Remove non-content elements
   const removeSelectors = [
     'script',
     'style',
@@ -36,52 +51,69 @@ function cleanDocumentText(): string {
     elements.forEach((el) => el.remove());
   }
 
-  // Extract clean text
   const rawText = clone.innerText || clone.textContent || '';
-  
-  // Normalize whitespace
+
   const normalized = rawText
     .replace(/\r\n/g, '\n')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n\s*\n\s*\n+/g, '\n\n')
     .trim();
 
-  // Cap at 64k characters for model context limit
-  return normalized.slice(0, 65536);
+  // Limit to ~15,000 characters
+  return normalized.slice(0, 15000);
 }
 
-export interface ExtractedPagePayload {
-  url: string;
-  title: string;
-  text: string;
+/**
+ * Scans document for links whose text or href matches policy keywords.
+ */
+function scanCandidateLinks(): CandidateLink[] {
+  const anchors = document.querySelectorAll<HTMLAnchorElement>('a[href]');
+  const found: CandidateLink[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const a of anchors) {
+    const href = a.href;
+    const text = (a.innerText || a.textContent || '').trim();
+
+    if (!href || href.startsWith('javascript:') || href.startsWith('#')) {
+      continue;
+    }
+
+    const hrefLower = href.toLowerCase();
+    const textLower = text.toLowerCase();
+
+    const matches = POLICY_KEYWORDS.some(
+      (kw) => hrefLower.includes(kw) || textLower.includes(kw)
+    );
+
+    if (matches && !seenUrls.has(href)) {
+      seenUrls.add(href);
+      found.push({
+        text: text || href,
+        href,
+      });
+      if (found.length >= 30) break;
+    }
+  }
+
+  return found;
 }
 
-function extractPage(): ExtractedPagePayload {
-  return {
-    url: window.location.href,
-    title: document.title || '',
-    text: cleanDocumentText(),
-  };
-}
-
-// Listen for requests from popup or background script
+// Listen for messages from service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message && message.type === 'EXTRACT_POLICY_TEXT') {
-    const payload = extractPage();
-    sendResponse({ success: true, data: payload });
+  if (message?.action === 'extract-text' || message?.type === 'EXTRACT_POLICY_TEXT') {
+    const payload: ExtractedPageText = {
+      text: cleanDocumentText(),
+      title: document.title || '',
+      url: window.location.href,
+    };
+    sendResponse(payload);
+    return true;
+  }
+
+  if (message?.action === 'scan-links' || message?.type === 'SCAN_LINKS') {
+    const links = scanCandidateLinks();
+    sendResponse(links);
     return true;
   }
 });
-
-// Proactively send page info on idle load
-try {
-  chrome.runtime.sendMessage({
-    type: 'CONTENT_LOADED',
-    data: {
-      url: window.location.href,
-      title: document.title || '',
-    },
-  });
-} catch {
-  // Extension context might be invalidated or not ready
-}

@@ -1,47 +1,20 @@
-export type Grade = 'A' | 'B' | 'C' | 'D';
+import type { GradeRequest, GradeResponse, Grade, PolicySummary, GradeSource } from './types';
 
-export interface UserRights {
-  can_delete_data: boolean;
-  can_export_data: boolean;
-  can_opt_out_of_tracking: boolean;
-}
-
-export interface PolicySummary {
-  data_collected: string[];
-  data_used_for: string[];
-  shared_with_third_parties: boolean;
-  third_party_details: string;
-  retention_period: string;
-  user_rights: UserRights;
-  tracking_and_ads: string;
-  arbitration_or_class_action_waiver: boolean;
-  policy_clarity_notes: string;
-}
-
-export interface GradeRequest {
-  url: string;
-  title: string;
-  text: string;
-}
-
-export interface GradeResponse {
-  grade: Grade;
-  summary: PolicySummary;
-  cached: boolean;
-  source: 'curated' | 'community' | 'llm';
-}
+export type { GradeRequest, GradeResponse, Grade, PolicySummary, GradeSource };
 
 export interface HealthResponse {
   status: string;
   ready: boolean;
-  sidecar_ready: boolean;
-  version?: string;
+  sidecar_ready?: boolean;
+  model_downloaded?: boolean;
+  error?: string;
 }
 
 export const DEFAULT_API_URL = 'http://127.0.0.1:4343';
 
 /**
  * Checks whether the desktop companion app and sidecar are running.
+ * Handles network errors gracefully when the desktop app is offline.
  */
 export async function checkHealth(apiUrl: string = DEFAULT_API_URL): Promise<HealthResponse> {
   const controller = new AbortController();
@@ -53,9 +26,25 @@ export async function checkHealth(apiUrl: string = DEFAULT_API_URL): Promise<Hea
       signal: controller.signal,
     });
     if (!res.ok) {
-      throw new Error(`HTTP error ${res.status}`);
+      return {
+        status: 'error',
+        ready: false,
+        error: `Desktop app returned HTTP ${res.status}`,
+      };
     }
-    return await res.json();
+    const data = await res.json();
+    return {
+      status: data.status || 'ok',
+      ready: data.status === 'ok' && data.sidecar_ready !== false,
+      sidecar_ready: data.sidecar_ready,
+      model_downloaded: data.model_downloaded,
+    };
+  } catch (err: any) {
+    return {
+      status: 'offline',
+      ready: false,
+      error: 'Desktop companion app is not running or unreachable at 127.0.0.1:4343',
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -63,14 +52,15 @@ export async function checkHealth(apiUrl: string = DEFAULT_API_URL): Promise<Hea
 
 /**
  * Sends policy text to local desktop companion app for inference or cache lookup.
+ * Handles network errors gracefully with clear descriptive messages.
  */
 export async function gradePolicy(
   req: GradeRequest,
   apiUrl: string = DEFAULT_API_URL
 ): Promise<GradeResponse> {
   const controller = new AbortController();
-  // Allow up to 45 seconds for local LLM inference
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  // Allow up to 60 seconds for local LLM inference
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
 
   try {
     const res = await fetch(`${apiUrl}/grade`, {
@@ -83,11 +73,25 @@ export async function gradePolicy(
     });
 
     if (!res.ok) {
-      const errBody = await res.text();
-      throw new Error(`Server returned ${res.status}: ${errBody}`);
+      let errDetail = '';
+      try {
+        const json = await res.json();
+        errDetail = json.error || JSON.stringify(json);
+      } catch {
+        errDetail = await res.text();
+      }
+      throw new Error(`Grading service returned HTTP ${res.status}: ${errDetail}`);
     }
 
     return await res.json();
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('Grading request timed out. Local model took longer than 60s.');
+    }
+    if (err.message && err.message.includes('Grading service returned')) {
+      throw err;
+    }
+    throw new Error(`Cannot reach Crixata desktop app at ${apiUrl}. Please make sure Crixata is running.`);
   } finally {
     clearTimeout(timeoutId);
   }
