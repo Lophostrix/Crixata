@@ -11,6 +11,7 @@
       "types": "./dist/index.d.ts"
     },
     "./schema.json": "./schema.json",
+    "./shard.schema.json": "./shard.schema.json",
     "./types": {
       "import": "./dist/types.js",
       "types": "./dist/types.d.ts"
@@ -19,6 +20,7 @@
   "files": [
     "dist",
     "schema.json",
+    "shard.schema.json",
     "types.ts",
     "examples"
   ],

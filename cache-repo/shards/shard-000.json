@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-04T12:00:00Z",
+  "shards": [
+    {
+      "domain": "duckduckgo.com",
+      "policy_url": "https://duckduckgo.com/privacy",
+      "policy_hash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "grade": "A",
+      "summary": {
+        "data_collected": [],
+        "data_used_for": [],
+        "shared_with_third_parties": false,
+        "third_party_details": "We do not store, share, or monetize any personal information because we do not collect any personal data.",
+        "retention_period": "Zero retention of personal identifiers or search queries.",
+        "user_rights": {
+          "can_delete_data": true,
+          "can_export_data": true,
+          "can_opt_out_of_tracking": true
+        },
+        "tracking_and_ads": "No tracking cookies, no canvas fingerprinting, and no behavioral ad networks.",
+        "arbitration_or_class_action_waiver": false,
+        "policy_clarity_notes": "Exemplary clear and direct policy statement with strong privacy commitments."
+      },
+      "source": "cache",
+      "graded_at": "2026-09-04T12:00:00Z"
+    },
+    {
+      "domain": "mozilla.org",
+      "policy_url": "https://www.mozilla.org/en-US/privacy/firefox/",
+      "policy_hash": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "grade": "A",
+      "summary": {
+        "data_collected": [
+          "technical diagnostic data",
+          "crash reports",
+          "interaction telemetry"
+        ],
+        "data_used_for": [
+          "browser performance improvements",
+          "security fixes",
+          "feature stability"
+        ],
+        "shared_with_third_parties": false,
+        "third_party_details": "Personal data is never sold or shared with commercial data brokers.",
+        "retention_period": "Telemetry data is aggregated and raw records deleted within 13 months.",
+        "user_rights": {
+          "can_delete_data": true,
+          "can_export_data": true,
+          "can_opt_out_of_tracking": true
+        },
+        "tracking_and_ads": "Enhanced Tracking Protection is turned on by default; no cross-site advertising trackers.",
+        "arbitration_or_class_action_waiver": false,
+        "policy_clarity_notes": "Very readable with transparent disclosures of defaults and opt-outs."
+      },
+      "source": "cache",
+      "graded_at": "2026-09-04T12:00:00Z"
+    },
+    {
+      "domain": "wikipedia.org",
+      "policy_url": "https://foundation.wikimedia.org/wiki/Policy:Privacy_policy",
+      "policy_hash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "grade": "A",
+      "summary": {
+        "data_collected": [
+          "IP address",
+          "user-agent",
+          "public wiki edit history"
+        ],
+        "data_used_for": [
+          "protecting wikis from vandalism",
+          "operating the Wikimedia infrastructure"
+        ],
+        "shared_with_third_parties": false,
+        "third_party_details": "Information is not shared with third parties except under valid legal processes.",
+        "retention_period": "Raw access logs and IP addresses are deleted or anonymized after 90 days.",
+        "user_rights": {
+          "can_delete_data": true,
+          "can_export_data": true,
+          "can_opt_out_of_tracking": true
+        },
+        "tracking_and_ads": "No third-party advertising cookies or commercial ad trackers.",
+        "arbitration_or_class_action_waiver": false,
+        "policy_clarity_notes": "Well-structured open source policy with high clarity and respect for user autonomy."
+      },
+      "source": "cache",
+      "graded_at": "2026-09-04T12:00:00Z"
+    }
+  ]
+}

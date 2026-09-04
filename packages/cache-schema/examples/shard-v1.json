@@ -1,17 +1,19 @@
 {
-  "version": "1.0.0",
-  "shard_id": "shard-001",
+  "version": 1,
   "updated_at": "2026-09-04T12:00:00Z",
-  "policies": [
+  "shards": [
     {
       "domain": "example.com",
       "policy_url": "https://example.com/privacy",
-      "policy_type": "privacy_policy",
-      "policy_version_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "policy_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "grade": "A",
       "summary": {
-        "data_collected": ["anonymous telemetry"],
-        "data_used_for": ["service optimization"],
+        "data_collected": [
+          "anonymous telemetry"
+        ],
+        "data_used_for": [
+          "service optimization"
+        ],
         "shared_with_third_parties": false,
         "third_party_details": "None. Personal data is never shared or sold.",
         "retention_period": "30 days rolling",
@@ -24,19 +26,28 @@
         "arbitration_or_class_action_waiver": false,
         "policy_clarity_notes": "Plain language, clear retention periods, no deceptive clauses."
       },
-      "graded_at": "2026-09-04T12:00:00Z",
-      "model_version": "Llama-3.2-3B-Instruct",
-      "source": "curated"
+      "source": "cache",
+      "graded_at": "2026-09-04T12:00:00Z"
     },
     {
       "domain": "socialnetwork.example",
       "policy_url": "https://socialnetwork.example/terms",
-      "policy_type": "terms_of_service",
-      "policy_version_hash": "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+      "policy_hash": "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
       "grade": "C",
       "summary": {
-        "data_collected": ["email", "IP address", "device identifier", "location data", "browsing history"],
-        "data_used_for": ["targeted advertising", "analytics", "profiling", "service provision"],
+        "data_collected": [
+          "email",
+          "IP address",
+          "device identifier",
+          "location data",
+          "browsing history"
+        ],
+        "data_used_for": [
+          "targeted advertising",
+          "analytics",
+          "profiling",
+          "service provision"
+        ],
         "shared_with_third_parties": true,
         "third_party_details": "Shared with affiliate networks, programmatic advertising exchanges, and measurement partners.",
         "retention_period": "Indefinite or until account deletion request is processed.",
@@ -49,9 +60,8 @@
         "arbitration_or_class_action_waiver": true,
         "policy_clarity_notes": "Dense legal terminology, forced arbitration in Delaware, class-action waiver included."
       },
-      "graded_at": "2026-09-04T12:05:00Z",
-      "model_version": "Llama-3.2-3B-Instruct",
-      "source": "llm"
+      "source": "cache",
+      "graded_at": "2026-09-04T12:05:00Z"
     }
   ]
 }

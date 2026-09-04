@@ -17,6 +17,7 @@ use crate::config::AppConfig;
 use crate::model::ModelManager;
 use crate::server::start_local_server;
 use crate::sidecar::{SidecarManager, SidecarStatus};
+use crate::sync::{CacheSync, SyncReport};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressPayload {
@@ -39,6 +40,7 @@ fn get_app_status(
     let model_present = model_manager.is_model_present();
     let sidecar_present = model_manager.is_sidecar_present();
     let cached_count = cache.count_grades().unwrap_or(0);
+    let last_sync_time = cache.get_last_sync_time().ok().flatten().map(|dt| dt.to_rfc3339());
 
     serde_json::json!({
         "status": "running",
@@ -51,6 +53,8 @@ fn get_app_status(
         "local_api_port": config.server_port,
         "llama_server_port": config.llama_server_port,
         "cached_policies_count": cached_count,
+        "cdn_shard_base_url": config.cdn_shard_base_url,
+        "last_sync_time": last_sync_time,
         "zero_telemetry": true
     })
 }
@@ -137,6 +141,46 @@ async fn download_model(
     Ok(())
 }
 
+#[tauri::command]
+async fn trigger_cache_sync(
+    sync: tauri::State<'_, Arc<CacheSync>>,
+) -> Result<SyncReport, String> {
+    sync.sync_all()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_last_sync_status(
+    cache: tauri::State<'_, Arc<CacheManager>>,
+) -> serde_json::Value {
+    let last_time = cache.get_last_sync_time().ok().flatten().map(|dt| dt.to_rfc3339());
+    let last_report_raw = cache.get_metadata("last_sync_report").ok().flatten();
+    let report: Option<SyncReport> = last_report_raw.and_then(|r| serde_json::from_str(&r).ok());
+
+    if let Some(rep) = report {
+        serde_json::json!({
+            "last_sync_time": rep.last_sync_time.or(last_time),
+            "shards_fetched": rep.shards_fetched,
+            "entries_added": rep.entries_added,
+            "entries_updated": rep.entries_updated,
+            "errors": rep.errors,
+            "error_count": rep.errors.len(),
+            "has_synced": true
+        })
+    } else {
+        serde_json::json!({
+            "last_sync_time": last_time,
+            "shards_fetched": 0,
+            "entries_added": 0,
+            "entries_updated": 0,
+            "errors": Vec::<String>::new(),
+            "error_count": 0,
+            "has_synced": last_time.is_some()
+        })
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::default();
@@ -145,6 +189,7 @@ pub fn run() {
             .unwrap_or_else(|_| CacheManager::in_memory().expect("in-memory sqlite failed")),
     );
 
+    let cache_sync = Arc::new(CacheSync::new(&config, Arc::clone(&cache)));
     let model_manager = Arc::new(ModelManager::new(config.clone()));
 
     let sidecar = Arc::new(AsyncMutex::new(SidecarManager::new(
@@ -171,6 +216,35 @@ pub fn run() {
         });
     }
 
+    // Spawn non-blocking background tokio task running cache sync every 24 hours
+    let sync_scheduler = Arc::clone(&cache_sync);
+    let sync_interval_hours = config.sync_interval_hours;
+    tauri::async_runtime::spawn(async move {
+        // Startup grace period: 5s delay so startup is never blocked
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        let interval = std::time::Duration::from_secs(sync_interval_hours.max(1) * 3600);
+        loop {
+            if sync_scheduler.is_reachable().await {
+                match sync_scheduler.sync_all().await {
+                    Ok(report) => {
+                        println!(
+                            "Background cache sync finished: {} shards, {} added, {} updated, {} errors",
+                            report.shards_fetched, report.entries_added, report.entries_updated, report.errors.len()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Background cache sync error: {}", e);
+                    }
+                }
+            } else {
+                println!("Cache CDN is unreachable; skipping scheduled sync.");
+            }
+
+            tokio::time::sleep(interval).await;
+        }
+    });
+
     let sidecar_for_exit = Arc::clone(&sidecar);
 
     let builder = tauri::Builder::default()
@@ -183,6 +257,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(config)
         .manage(cache)
+        .manage(cache_sync)
         .manage(sidecar)
         .manage(model_manager)
         .setup(|app| {
@@ -199,7 +274,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_status,
             get_download_status,
-            download_model
+            download_model,
+            trigger_cache_sync,
+            get_last_sync_status,
         ]);
 
     builder

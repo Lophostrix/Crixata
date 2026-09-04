@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -72,10 +73,51 @@ impl CacheManager {
                 version TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 synced_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );",
         )?;
 
         Ok(())
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM metadata WHERE key = ?1 LIMIT 1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO metadata (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_last_sync_time(&self) -> Result<Option<DateTime<Utc>>> {
+        if let Some(val) = self.get_metadata("last_sync_time")? {
+            if let Ok(dt) = DateTime::parse_from_rfc3339(&val) {
+                return Ok(Some(dt.with_timezone(&Utc)));
+            }
+            if let Ok(ts) = val.parse::<i64>() {
+                return Ok(DateTime::from_timestamp(ts, 0));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn set_last_sync_time(&self, time: DateTime<Utc>) -> Result<()> {
+        self.set_metadata("last_sync_time", &time.to_rfc3339())
     }
 
     pub fn get_grade(&self, domain: &str, policy_url: &str) -> Result<Option<GradeRecord>> {
@@ -147,11 +189,29 @@ impl CacheManager {
         summary: &PolicySummary,
         source: &str,
     ) -> Result<GradeRecord> {
+        self.upsert_cache_entry(domain, policy_url, policy_hash, grade, summary, source, None)
+    }
+
+    pub fn upsert_cache_entry(
+        &self,
+        domain: &str,
+        policy_url: &str,
+        policy_hash: Option<&str>,
+        grade: &str,
+        summary: &PolicySummary,
+        source: &str,
+        graded_at: Option<&str>,
+    ) -> Result<GradeRecord> {
         let summary_json = serde_json::to_string(summary)?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let timestamp = graded_at
+            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+            .map(|dt| dt.timestamp())
+            .unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64
+            });
 
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -170,7 +230,7 @@ impl CacheManager {
                 grade,
                 summary_json,
                 source,
-                now,
+                timestamp,
             ],
         )?;
 
@@ -274,5 +334,79 @@ mod tests {
 
         let recent = cache.list_recent(10).unwrap();
         assert_eq!(recent.len(), 1);
+    }
+
+    #[test]
+    fn test_metadata_operations() {
+        let cache = CacheManager::in_memory().unwrap();
+
+        assert_eq!(cache.get_metadata("test_key").unwrap(), None);
+
+        cache.set_metadata("test_key", "test_value").unwrap();
+        assert_eq!(
+            cache.get_metadata("test_key").unwrap(),
+            Some("test_value".to_string())
+        );
+
+        cache.set_metadata("test_key", "updated_value").unwrap();
+        assert_eq!(
+            cache.get_metadata("test_key").unwrap(),
+            Some("updated_value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_last_sync_time() {
+        let cache = CacheManager::in_memory().unwrap();
+
+        assert_eq!(cache.get_last_sync_time().unwrap(), None);
+
+        let test_time = DateTime::parse_from_rfc3339("2026-09-04T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        cache.set_last_sync_time(test_time).unwrap();
+        let fetched = cache.get_last_sync_time().unwrap();
+        assert_eq!(fetched, Some(test_time));
+    }
+
+    #[test]
+    fn test_upsert_cache_entry_with_graded_at() {
+        let cache = CacheManager::in_memory().unwrap();
+
+        let summary = PolicySummary {
+            data_collected: vec!["cookies".into()],
+            data_used_for: vec!["analytics".into()],
+            shared_with_third_parties: false,
+            third_party_details: "None".into(),
+            retention_period: "14 days".into(),
+            user_rights: UserRights::default(),
+            tracking_and_ads: "None".into(),
+            arbitration_or_class_action_waiver: false,
+            policy_clarity_notes: "Very clear".into(),
+        };
+
+        let record = cache
+            .upsert_cache_entry(
+                "duckduckgo.com",
+                "https://duckduckgo.com/privacy",
+                Some("hash999"),
+                "A",
+                &summary,
+                "cache",
+                Some("2026-09-04T12:00:00Z"),
+            )
+            .unwrap();
+
+        assert_eq!(record.domain, "duckduckgo.com");
+        assert_eq!(record.source, "cache");
+        assert_eq!(record.grade, "A");
+        assert_eq!(record.policy_hash, Some("hash999".into()));
+
+        // Check that updated_at reflects the parsed timestamp
+        let expected_ts = DateTime::parse_from_rfc3339("2026-09-04T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(record.updated_at, expected_ts);
     }
 }

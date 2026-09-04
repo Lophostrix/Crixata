@@ -2,6 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
+fn default_sync_interval_hours() -> u64 {
+    24
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server_port: u16,
@@ -10,6 +14,8 @@ pub struct AppConfig {
     pub model_filename: String,
     pub model_url: String,
     pub cdn_shard_base_url: String,
+    #[serde(default = "default_sync_interval_hours")]
+    pub sync_interval_hours: u64,
     pub data_dir: PathBuf,
 }
 
@@ -27,6 +33,7 @@ impl Default for AppConfig {
             model_filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),
             model_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),
             cdn_shard_base_url: "https://cdn.jsdelivr.net/gh/Lophostrix/crixata-cache@main/shards".to_string(),
+            sync_interval_hours: 24,
             data_dir,
         }
     }

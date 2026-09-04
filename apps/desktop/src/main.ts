@@ -12,6 +12,8 @@ interface AppStatus {
   local_api_port: number;
   llama_server_port: number;
   cached_policies_count: number;
+  cdn_shard_base_url?: string;
+  last_sync_time?: string;
   zero_telemetry: boolean;
 }
 
@@ -19,6 +21,34 @@ interface ProgressPayload {
   percentage: number;
   status: string;
   message: string;
+}
+
+interface SyncStatus {
+  last_sync_time: string | null;
+  shards_fetched: number;
+  entries_added: number;
+  entries_updated: number;
+  errors: string[];
+  error_count: number;
+  has_synced: boolean;
+}
+
+interface SyncReport {
+  shards_fetched: number;
+  entries_added: number;
+  entries_updated: number;
+  errors: string[];
+  last_sync_time?: string;
+}
+
+function formatTimestamp(isoStr: string | null | undefined): string {
+  if (!isoStr) return "Never";
+  try {
+    const d = new Date(isoStr);
+    return isNaN(d.getTime()) ? isoStr : d.toLocaleString();
+  } catch {
+    return isoStr;
+  }
 }
 
 async function refreshStatus(): Promise<void> {
@@ -105,6 +135,91 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
+async function refreshSyncStatus(): Promise<void> {
+  const syncTimeEl = document.getElementById("sync-stat-time");
+  const cardSyncTimeEl = document.getElementById("sync-last-time");
+  const shardsCountEl = document.getElementById("sync-shards-count");
+  const addedCountEl = document.getElementById("sync-added-count");
+  const updatedCountEl = document.getElementById("sync-updated-count");
+  const errorsContainer = document.getElementById("sync-errors-container");
+  const errorsList = document.getElementById("sync-errors-list");
+
+  try {
+    const status: SyncStatus = await invoke("get_last_sync_status");
+
+    const formattedTime = formatTimestamp(status.last_sync_time);
+    if (syncTimeEl) syncTimeEl.textContent = formattedTime;
+    if (cardSyncTimeEl) cardSyncTimeEl.textContent = formattedTime;
+
+    if (shardsCountEl) shardsCountEl.textContent = String(status.shards_fetched);
+    if (addedCountEl) addedCountEl.textContent = String(status.entries_added);
+    if (updatedCountEl) updatedCountEl.textContent = String(status.entries_updated);
+
+    if (errorsContainer && errorsList) {
+      if (status.errors && status.errors.length > 0) {
+        errorsContainer.style.display = "block";
+        errorsList.innerHTML = "";
+        for (const err of status.errors) {
+          const li = document.createElement("li");
+          li.textContent = err;
+          errorsList.appendChild(li);
+        }
+      } else {
+        errorsContainer.style.display = "none";
+        errorsList.innerHTML = "";
+      }
+    }
+  } catch (err: any) {
+    console.error("Failed to load sync status:", err);
+  }
+}
+
+async function triggerSync(): Promise<void> {
+  const syncBtn = document.getElementById("sync-cache-btn") as HTMLButtonElement | null;
+  const syncMsgEl = document.getElementById("sync-status-msg");
+  const errorsContainer = document.getElementById("sync-errors-container");
+  const errorsList = document.getElementById("sync-errors-list");
+
+  if (syncBtn) {
+    syncBtn.disabled = true;
+    syncBtn.textContent = "Syncing Cache...";
+  }
+  if (syncMsgEl) {
+    syncMsgEl.textContent = "Fetching CDN shards...";
+  }
+
+  try {
+    const report: SyncReport = await invoke("trigger_cache_sync");
+    if (syncMsgEl) {
+      if (report.errors && report.errors.length > 0) {
+        syncMsgEl.textContent = `Completed with ${report.errors.length} error(s)`;
+      } else {
+        syncMsgEl.textContent = "Sync complete";
+      }
+    }
+
+    await refreshSyncStatus();
+    await refreshStatus();
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    if (syncMsgEl) {
+      syncMsgEl.textContent = `Sync failed`;
+    }
+    if (errorsContainer && errorsList) {
+      errorsContainer.style.display = "block";
+      errorsList.innerHTML = "";
+      const li = document.createElement("li");
+      li.textContent = `Sync failed: ${errMsg}`;
+      errorsList.appendChild(li);
+    }
+  } finally {
+    if (syncBtn) {
+      syncBtn.disabled = false;
+      syncBtn.textContent = "Sync Policy Cache Now";
+    }
+  }
+}
+
 async function triggerDownload(): Promise<void> {
   const downloadBtn = document.getElementById("download-model-btn") as HTMLButtonElement | null;
   const progressBar = document.getElementById("progress-bar");
@@ -137,11 +252,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   const checkBtn = document.getElementById("check-status-btn");
   checkBtn?.addEventListener("click", () => {
     refreshStatus();
+    refreshSyncStatus();
   });
 
   const downloadBtn = document.getElementById("download-model-btn");
   downloadBtn?.addEventListener("click", () => {
     triggerDownload();
+  });
+
+  const syncBtn = document.getElementById("sync-cache-btn");
+  syncBtn?.addEventListener("click", () => {
+    triggerSync();
   });
 
   // Listen for background download progress events
@@ -178,6 +299,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     console.error("Failed to register progress listener:", err);
   }
 
-  // Initial status check
+  // Initial status checks
   refreshStatus();
+  refreshSyncStatus();
 });

@@ -101,6 +101,10 @@
               <span class="metric-label">CDN Sync:</span>
               <span class="metric-value">jsDelivr (crixata-cache)</span>
             </div>
+            <div class="metric-row">
+              <span class="metric-label">Last Sync:</span>
+              <span class="metric-value font-mono" id="sync-last-time">Never</span>
+            </div>
           </div>
         </div>
 
@@ -142,6 +146,44 @@
               <span id="progress-step">Awaiting trigger...</span>
               <span id="progress-pct" class="font-mono">0%</span>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-icon">🔄</span>
+          <h3>Public Policy Cache Sync (jsDelivr CDN)</h3>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">
+            Sync pre-graded policy shards from the community repository via jsDelivr CDN. Shards are merged locally into SQLite. Background sync runs automatically every 24 hours when online.
+          </p>
+          <div class="action-row">
+            <button id="sync-cache-btn" class="btn btn-primary">Sync Policy Cache Now</button>
+            <span id="sync-status-msg" class="metric-label">Ready</span>
+          </div>
+          <div class="sync-stats-grid">
+            <div class="sync-stat-item">
+              <span class="sync-stat-label">Last Sync</span>
+              <span class="sync-stat-value font-mono" id="sync-stat-time">Never</span>
+            </div>
+            <div class="sync-stat-item">
+              <span class="sync-stat-label">Shards Fetched</span>
+              <span class="sync-stat-value font-mono" id="sync-shards-count">0</span>
+            </div>
+            <div class="sync-stat-item">
+              <span class="sync-stat-label">Entries Added</span>
+              <span class="sync-stat-value font-mono" id="sync-added-count">0</span>
+            </div>
+            <div class="sync-stat-item">
+              <span class="sync-stat-label">Entries Updated</span>
+              <span class="sync-stat-value font-mono" id="sync-updated-count">0</span>
+            </div>
+          </div>
+          <div id="sync-errors-container" class="sync-errors-box" style="display: none;">
+            <div class="sync-errors-header">⚠️ Sync Errors:</div>
+            <ul id="sync-errors-list" class="sync-errors-list"></ul>
           </div>
         </div>
       </section>

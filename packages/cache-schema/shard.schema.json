@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://crixata.org/schemas/cache-shard-v1.json",
+  "$id": "https://crixata.org/schemas/shard.schema.json",
   "title": "CrixataCacheShard",
-  "description": "Schema for a Crixata pre-graded policy cache shard",
+  "description": "Schema for a Crixata pre-graded policy cache shard file",
   "type": "object",
   "required": [
     "version",

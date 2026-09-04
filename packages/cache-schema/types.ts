@@ -1,6 +1,6 @@
 /**
  * Crixata Cache Schema & Types
- * Mirror of packages/cache-schema/schema.json
+ * Mirror of packages/cache-schema/schema.json & shard.schema.json
  */
 
 export type Grade = 'A' | 'B' | 'C' | 'D';
@@ -11,7 +11,7 @@ export type PolicyType =
   | 'cookie_policy'
   | 'other';
 
-export type GradeSource = 'curated' | 'community' | 'llm';
+export type GradeSource = 'cache' | 'curated' | 'community' | 'llm';
 
 export interface UserRights {
   /** Whether the user has explicit right to request deletion of personal data */
@@ -43,36 +43,42 @@ export interface PolicySummary {
   policy_clarity_notes: string;
 }
 
-export interface PolicyRecord {
+export interface CacheShardEntry {
   /** Normalized root domain (e.g. example.com) */
   domain: string;
   /** Canonical URL of the policy */
   policy_url: string;
-  /** Type of legal document */
-  policy_type: PolicyType;
-  /** SHA-256 hash of normalized policy text */
-  policy_version_hash: string;
+  /** SHA-256 or text hash of normalized policy text */
+  policy_hash: string;
   /** Deterministic privacy grade */
   grade: Grade;
   /** Structured extracted summary */
   summary: PolicySummary;
+  /** Source of the evaluation (e.g. cache, curated, community, llm) */
+  source: GradeSource | string;
   /** ISO 8601 timestamp when evaluation took place */
   graded_at: string;
-  /** SLM or heuristic model version used */
-  model_version: string;
-  /** Source of the evaluation */
-  source: GradeSource;
+  /** Optional type of legal document */
+  policy_type?: PolicyType;
+  /** Optional SLM or heuristic model version used */
+  model_version?: string;
 }
 
+/** Alias for backwards compatibility */
+export type PolicyRecord = CacheShardEntry;
+
 export interface CacheShard {
-  /** Cache schema specification version */
-  version: string;
-  /** Identifier for the shard partition (e.g. shard-001) */
-  shard_id: string;
+  /** Cache schema specification version (e.g. 1) */
+  version: number;
   /** ISO 8601 timestamp when this shard was last updated */
   updated_at: string;
-  /** Array of pre-graded policy records in this shard */
-  policies: PolicyRecord[];
+  /** Array of pre-graded policy entries in this shard */
+  shards: CacheShardEntry[];
+}
+
+export interface CacheIndex {
+  /** List of available shard filenames (e.g. ["shard-000.json"]) */
+  shards: string[];
 }
 
 export interface GradeRequest {
