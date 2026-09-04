@@ -1,22 +1,24 @@
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::grade::{Grade, PolicySummary};
+use crate::grade::PolicySummary;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedPolicyRecord {
+pub struct GradeRecord {
+    pub id: i64,
     pub domain: String,
     pub policy_url: String,
-    pub policy_type: String,
-    pub policy_version_hash: String,
-    pub grade: Grade,
+    pub policy_hash: Option<String>,
+    pub grade: String,
+    pub summary_json: String,
     pub summary: PolicySummary,
-    pub graded_at: String,
-    pub model_version: String,
     pub source: String,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 pub struct CacheManager {
@@ -51,102 +53,226 @@ impl CacheManager {
 
     fn init_schema(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS policies (
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS grades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 domain TEXT NOT NULL,
                 policy_url TEXT NOT NULL,
-                policy_type TEXT NOT NULL,
-                policy_version_hash TEXT PRIMARY KEY,
+                policy_hash TEXT,
                 grade TEXT NOT NULL,
                 summary_json TEXT NOT NULL,
-                graded_at TEXT NOT NULL,
-                model_version TEXT NOT NULL,
-                source TEXT NOT NULL
-            );",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policies_domain_url 
-             ON policies(domain, policy_url);",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sync_shards (
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(domain, policy_url)
+            );
+            CREATE INDEX IF NOT EXISTS idx_domain ON grades(domain);
+            CREATE TABLE IF NOT EXISTS sync_shards (
                 shard_id TEXT PRIMARY KEY,
                 version TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 synced_at TEXT NOT NULL
             );",
-            [],
         )?;
 
         Ok(())
     }
 
-    pub fn get_by_url(&self, url: &str) -> Result<Option<CachedPolicyRecord>> {
+    pub fn get_grade(&self, domain: &str, policy_url: &str) -> Result<Option<GradeRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT domain, policy_url, policy_type, policy_version_hash, grade, summary_json, graded_at, model_version, source
-             FROM policies WHERE policy_url = ?1 LIMIT 1",
+            "SELECT id, domain, policy_url, policy_hash, grade, summary_json, source, created_at, updated_at
+             FROM grades WHERE domain = ?1 AND policy_url = ?2 LIMIT 1",
         )?;
 
-        let mut rows = stmt.query(params![url])?;
+        let mut rows = stmt.query(params![domain, policy_url])?;
         if let Some(row) = rows.next()? {
-            let grade_str: String = row.get(4)?;
-            let grade = match grade_str.as_str() {
-                "A" => Grade::A,
-                "B" => Grade::B,
-                "C" => Grade::C,
-                _ => Grade::D,
-            };
             let summary_json: String = row.get(5)?;
-            let summary: PolicySummary = serde_json::from_str(&summary_json)?;
+            let summary: PolicySummary = serde_json::from_str(&summary_json)
+                .with_context(|| "Failed to deserialize cached PolicySummary JSON")?;
 
-            Ok(Some(CachedPolicyRecord {
-                domain: row.get(0)?,
-                policy_url: row.get(1)?,
-                policy_type: row.get(2)?,
-                policy_version_hash: row.get(3)?,
-                grade,
+            Ok(Some(GradeRecord {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                policy_url: row.get(2)?,
+                policy_hash: row.get(3)?,
+                grade: row.get(4)?,
+                summary_json,
                 summary,
-                graded_at: row.get(6)?,
-                model_version: row.get(7)?,
-                source: row.get(8)?,
+                source: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             }))
         } else {
             Ok(None)
         }
     }
 
-    pub fn insert_policy(&self, record: &CachedPolicyRecord) -> Result<()> {
+    pub fn get_by_url(&self, policy_url: &str) -> Result<Option<GradeRecord>> {
         let conn = self.conn.lock().unwrap();
-        let summary_json = serde_json::to_string(&record.summary)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, domain, policy_url, policy_hash, grade, summary_json, source, created_at, updated_at
+             FROM grades WHERE policy_url = ?1 LIMIT 1",
+        )?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO policies 
-             (domain, policy_url, policy_type, policy_version_hash, grade, summary_json, graded_at, model_version, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                record.domain,
-                record.policy_url,
-                record.policy_type,
-                record.policy_version_hash,
-                record.grade.to_string(),
+        let mut rows = stmt.query(params![policy_url])?;
+        if let Some(row) = rows.next()? {
+            let summary_json: String = row.get(5)?;
+            let summary: PolicySummary = serde_json::from_str(&summary_json)
+                .with_context(|| "Failed to deserialize cached PolicySummary JSON")?;
+
+            Ok(Some(GradeRecord {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                policy_url: row.get(2)?,
+                policy_hash: row.get(3)?,
+                grade: row.get(4)?,
                 summary_json,
-                record.graded_at,
-                record.model_version,
-                record.source,
+                summary,
+                source: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn upsert_grade(
+        &self,
+        domain: &str,
+        policy_url: &str,
+        policy_hash: Option<&str>,
+        grade: &str,
+        summary: &PolicySummary,
+        source: &str,
+    ) -> Result<GradeRecord> {
+        let summary_json = serde_json::to_string(summary)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO grades (domain, policy_url, policy_hash, grade, summary_json, source, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(domain, policy_url) DO UPDATE SET
+                policy_hash = excluded.policy_hash,
+                grade = excluded.grade,
+                summary_json = excluded.summary_json,
+                source = excluded.source,
+                updated_at = excluded.updated_at",
+            params![
+                domain,
+                policy_url,
+                policy_hash,
+                grade,
+                summary_json,
+                source,
+                now,
             ],
         )?;
 
-        Ok(())
+        let id = conn.last_insert_rowid();
+        drop(conn);
+
+        // Fetch actual record
+        self.get_grade(domain, policy_url)?
+            .with_context(|| format!("Failed to retrieve upserted record for {} (id: {})", policy_url, id))
     }
 
-    pub fn count_policies(&self) -> Result<i64> {
+    pub fn list_recent(&self, limit: usize) -> Result<Vec<GradeRecord>> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM policies", [], |r| r.get(0))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, domain, policy_url, policy_hash, grade, summary_json, source, created_at, updated_at
+             FROM grades ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let summary_json: String = row.get(5)?;
+            let summary: PolicySummary = serde_json::from_str(&summary_json).unwrap_or_else(|_| PolicySummary {
+                data_collected: vec![],
+                data_used_for: vec![],
+                shared_with_third_parties: false,
+                third_party_details: "".into(),
+                retention_period: "".into(),
+                user_rights: Default::default(),
+                tracking_and_ads: "".into(),
+                arbitration_or_class_action_waiver: false,
+                policy_clarity_notes: "".into(),
+            });
+
+            Ok(GradeRecord {
+                id: row.get(0)?,
+                domain: row.get(1)?,
+                policy_url: row.get(2)?,
+                policy_hash: row.get(3)?,
+                grade: row.get(4)?,
+                summary_json,
+                summary,
+                source: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for item in rows {
+            list.push(item?);
+        }
+        Ok(list)
+    }
+
+    pub fn count_grades(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM grades", [], |r| r.get(0))?;
         Ok(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grade::UserRights;
+
+    #[test]
+    fn test_cache_crud() {
+        let cache = CacheManager::in_memory().unwrap();
+
+        let summary = PolicySummary {
+            data_collected: vec!["email".into()],
+            data_used_for: vec!["auth".into()],
+            shared_with_third_parties: false,
+            third_party_details: "None".into(),
+            retention_period: "30 days".into(),
+            user_rights: UserRights::default(),
+            tracking_and_ads: "None".into(),
+            arbitration_or_class_action_waiver: false,
+            policy_clarity_notes: "Clear".into(),
+        };
+
+        let record = cache
+            .upsert_grade(
+                "example.com",
+                "https://example.com/privacy",
+                Some("hash123"),
+                "A",
+                &summary,
+                "llm",
+            )
+            .unwrap();
+
+        assert_eq!(record.domain, "example.com");
+        assert_eq!(record.grade, "A");
+
+        let fetched = cache
+            .get_grade("example.com", "https://example.com/privacy")
+            .unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().summary.retention_period, "30 days");
+
+        let recent = cache.list_recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
     }
 }

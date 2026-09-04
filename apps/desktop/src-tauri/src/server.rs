@@ -1,10 +1,17 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::thread;
 use anyhow::Result;
+use reqwest::Client;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
+use tokio::sync::Mutex as AsyncMutex;
 
-use crate::cache::{CacheManager, CachedPolicyRecord};
-use crate::grade::{compute_grade, GradeRequest, GradeResponse, PolicySummary, UserRights};
+use crate::cache::CacheManager;
+use crate::grade::{compute_grade, GradeRequest, GradeResponse};
+use crate::llm::extract_policy_summary;
+use crate::model::ModelManager;
+use crate::sidecar::SidecarManager;
 
 pub struct LocalServerHandle {
     pub port: u16,
@@ -12,139 +19,203 @@ pub struct LocalServerHandle {
 
 pub fn start_local_server(
     port: u16,
+    llama_server_port: u16,
     cache: Arc<CacheManager>,
+    sidecar: Arc<AsyncMutex<SidecarManager>>,
+    model_manager: Arc<ModelManager>,
 ) -> Result<LocalServerHandle> {
     let addr = format!("127.0.0.1:{}", port);
     let server = Server::http(&addr)
         .map_err(|e| anyhow::anyhow!("Failed to bind local server to {}: {}", addr, e))?;
 
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime for local server: {}", e))?;
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_default();
+
     thread::spawn(move || {
         for mut request in server.incoming_requests() {
             let method = request.method().clone();
-            let url = request.url().to_string();
+            let url_path = request.url().to_string();
+
+            let cors_headers = build_cors_headers(&request);
 
             // Handle CORS preflight
             if method == Method::Options {
-                let response = Response::empty(StatusCode(204))
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap());
-                let _ = request.respond(response);
+                let mut resp = Response::empty(StatusCode(204));
+                for h in cors_headers {
+                    resp.add_header(h);
+                }
+                let _ = request.respond(resp);
                 continue;
             }
 
-            let cors_header = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
-            let json_header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+            // GET /health
+            if method == Method::Get && url_path.starts_with("/health") {
+                let sidecar_ready = sidecar.try_lock().map(|sc| sc.is_ready()).unwrap_or(false);
+                let model_downloaded = model_manager.is_model_present();
 
-            if method == Method::Get && url.starts_with("/health") {
                 let body = serde_json::json!({
                     "status": "ok",
-                    "ready": true,
-                    "sidecar_ready": false,
-                    "version": env!("CARGO_PKG_VERSION")
+                    "sidecar_ready": sidecar_ready,
+                    "model_downloaded": model_downloaded,
                 })
                 .to_string();
 
-                let response = Response::from_string(body)
-                    .with_header(cors_header)
-                    .with_header(json_header);
-                let _ = request.respond(response);
+                let mut resp = Response::from_string(body);
+                resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                for h in cors_headers {
+                    resp.add_header(h);
+                }
+                let _ = request.respond(resp);
                 continue;
             }
 
-            if method == Method::Post && url.starts_with("/grade") {
-                let mut content = String::new();
-                let _ = request.as_reader().read_to_string(&mut content);
+            // POST /grade
+            if method == Method::Post && url_path.starts_with("/grade") {
+                let mut body_str = String::new();
+                if let Err(e) = request.as_reader().read_to_string(&mut body_str) {
+                    let err_body = serde_json::json!({ "error": format!("Failed to read request body: {}", e) }).to_string();
+                    let mut resp = Response::from_string(err_body).with_status_code(StatusCode(400));
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    for h in cors_headers {
+                        resp.add_header(h);
+                    }
+                    let _ = request.respond(resp);
+                    continue;
+                }
 
-                let grade_req: Result<GradeRequest, _> = serde_json::from_str(&content);
-                match grade_req {
-                    Ok(req) => {
-                        // 1. Check local cache
-                        let cached = cache.get_by_url(&req.url).unwrap_or(None);
+                let grade_req: Result<GradeRequest, _> = serde_json::from_str(&body_str);
+                let req = match grade_req {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_body = serde_json::json!({ "error": format!("Invalid JSON request: {}", e) }).to_string();
+                        let mut resp = Response::from_string(err_body).with_status_code(StatusCode(400));
+                        resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        for h in cors_headers {
+                            resp.add_header(h);
+                        }
+                        let _ = request.respond(resp);
+                        continue;
+                    }
+                };
 
-                        let grade_response = if let Some(found) = cached {
-                            GradeResponse {
-                                grade: found.grade,
-                                summary: found.summary,
-                                cached: true,
-                                source: found.source,
-                            }
-                        } else {
-                            // 2. Perform local heuristic/SLM grading
-                            let lower = req.text.to_lowercase();
-                            let has_arbitration = lower.contains("arbitration") || lower.contains("class action");
-                            let has_opt_out = lower.contains("opt-out") || lower.contains("opt out");
-                            let has_deletion = lower.contains("delete your account") || lower.contains("right to delete");
-                            let has_export = lower.contains("data portability") || lower.contains("download your data");
-                            let shares_third_party = lower.contains("third-party partners") || lower.contains("advertising partners");
+                // 1. Validate url and text are non-empty
+                if req.url.trim().is_empty() || req.text.trim().is_empty() {
+                    let err_body = serde_json::json!({ "error": "Both 'url' and 'text' must be non-empty." }).to_string();
+                    let mut resp = Response::from_string(err_body).with_status_code(StatusCode(400));
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    for h in cors_headers {
+                        resp.add_header(h);
+                    }
+                    let _ = request.respond(resp);
+                    continue;
+                }
 
-                            let summary = PolicySummary {
-                                data_collected: vec!["standard web telemetry".into(), "cookies".into()],
-                                data_used_for: vec!["service provision".into(), "security".into()],
-                                shared_with_third_parties: shares_third_party,
-                                third_party_details: if shares_third_party {
-                                    "Third-party analytics and advertising partners.".into()
-                                } else {
-                                    "No unauthorized third-party sharing.".into()
-                                },
-                                retention_period: "Standard operational lifecycle".into(),
-                                user_rights: UserRights {
-                                    can_delete_data: has_deletion,
-                                    can_export_data: has_export,
-                                    can_opt_out_of_tracking: has_opt_out,
-                                },
-                                tracking_and_ads: "Standard session management and analytics.".into(),
-                                arbitration_or_class_action_waiver: has_arbitration,
-                                policy_clarity_notes: "Evaluated by Crixata local analyzer.".into(),
-                            };
+                // 2. Derive domain from URL
+                let domain = extract_domain(&req.url);
 
-                            let grade = compute_grade(&summary);
+                // 3. Check cache; return cached result if found
+                let cached_record = cache.get_grade(&domain, &req.url).unwrap_or(None);
+                if let Some(record) = cached_record {
+                    let grade_char = record.grade.chars().next().unwrap_or('D');
+                    let grade_resp = GradeResponse {
+                        grade: grade_char,
+                        summary: record.summary,
+                        cached: true,
+                        source: record.source,
+                    };
 
-                            // Store in cache
-                            let host = req.url.split('/').nth(2).unwrap_or("unknown");
-                            let record = CachedPolicyRecord {
-                                domain: host.to_string(),
-                                policy_url: req.url.clone(),
-                                policy_type: "privacy_policy".to_string(),
-                                policy_version_hash: format!("{:x}", md5_or_simple_hash(&req.text)),
-                                grade,
-                                summary: summary.clone(),
-                                graded_at: "2026-09-04T00:00:00Z".into(),
-                                model_version: "Llama-3.2-3B-Instruct".into(),
-                                source: "llm".into(),
-                            };
-                            let _ = cache.insert_policy(&record);
+                    let body = serde_json::to_string(&grade_resp).unwrap_or_default();
+                    let mut resp = Response::from_string(body);
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    for h in cors_headers {
+                        resp.add_header(h);
+                    }
+                    let _ = request.respond(resp);
+                    continue;
+                }
 
-                            GradeResponse {
-                                grade,
-                                summary,
-                                cached: false,
-                                source: "llm".into(),
-                            }
+                // 4. If not cached and sidecar is ready, call the LLM extraction function
+                let is_ready = sidecar.try_lock().map(|sc| sc.is_ready()).unwrap_or(false);
+                if !is_ready {
+                    let err_body = serde_json::json!({
+                        "error": "Inference sidecar is not ready. Please download the model and verify the engine is running."
+                    }).to_string();
+
+                    let mut resp = Response::from_string(err_body).with_status_code(StatusCode(503));
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    for h in cors_headers {
+                        resp.add_header(h);
+                    }
+                    let _ = request.respond(resp);
+                    continue;
+                }
+
+                let extraction_res = rt.block_on(extract_policy_summary(
+                    &req.text,
+                    &client,
+                    llama_server_port,
+                ));
+
+                match extraction_res {
+                    Ok(summary) => {
+                        // 5. Compute grade from extracted summary
+                        let grade_char = compute_grade(&summary);
+
+                        // 6. Store in cache and return
+                        let policy_hash = format!("{:016x}", compute_hash(&req.text));
+                        let _ = cache.upsert_grade(
+                            &domain,
+                            &req.url,
+                            Some(&policy_hash),
+                            &grade_char.to_string(),
+                            &summary,
+                            "llm",
+                        );
+
+                        let grade_resp = GradeResponse {
+                            grade: grade_char,
+                            summary,
+                            cached: false,
+                            source: "llm".into(),
                         };
 
-                        let body = serde_json::to_string(&grade_response).unwrap_or_default();
-                        let response = Response::from_string(body)
-                            .with_header(cors_header)
-                            .with_header(json_header);
-                        let _ = request.respond(response);
+                        let body = serde_json::to_string(&grade_resp).unwrap_or_default();
+                        let mut resp = Response::from_string(body);
+                        resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        for h in cors_headers {
+                            resp.add_header(h);
+                        }
+                        let _ = request.respond(resp);
                     }
                     Err(e) => {
-                        let err_body = serde_json::json!({ "error": format!("Invalid JSON payload: {}", e) }).to_string();
-                        let response = Response::from_string(err_body)
-                            .with_status_code(StatusCode(400))
-                            .with_header(cors_header)
-                            .with_header(json_header);
-                        let _ = request.respond(response);
+                        let err_body = serde_json::json!({
+                            "error": format!("LLM extraction failed: {}", e)
+                        }).to_string();
+
+                        let mut resp = Response::from_string(err_body).with_status_code(StatusCode(500));
+                        resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        for h in cors_headers {
+                            resp.add_header(h);
+                        }
+                        let _ = request.respond(resp);
                     }
                 }
+
                 continue;
             }
 
-            // 404 for other endpoints
-            let not_found = Response::from_string("Not Found")
-                .with_status_code(StatusCode(404))
-                .with_header(cors_header);
+            // 404 for any other route
+            let mut not_found = Response::from_string("Not Found").with_status_code(StatusCode(404));
+            for h in cors_headers {
+                not_found.add_header(h);
+            }
             let _ = request.respond(not_found);
         }
     });
@@ -152,10 +223,63 @@ pub fn start_local_server(
     Ok(LocalServerHandle { port })
 }
 
-fn md5_or_simple_hash(input: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+fn build_cors_headers(request: &tiny_http::Request) -> Vec<Header> {
+    let mut origin_val = "*".to_string();
+    for header in request.headers() {
+        if header.field.equiv("Origin") {
+            let val = header.value.as_str();
+            if val.starts_with("chrome-extension://")
+                || val.starts_with("http://localhost")
+                || val.starts_with("http://127.0.0.1")
+            {
+                origin_val = val.to_string();
+                break;
+            }
+        }
+    }
+
+    vec![
+        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin_val.as_bytes()).unwrap(),
+        Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap(),
+        Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization"[..]).unwrap(),
+    ]
+}
+
+pub fn extract_domain(url_str: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url_str) {
+        if let Some(host) = parsed.host_str() {
+            return host.to_string();
+        }
+    }
+
+    let stripped = url_str
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+
+    stripped
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .split(':')
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn compute_hash(input: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     input.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_domain() {
+        assert_eq!(extract_domain("https://example.com/privacy"), "example.com");
+        assert_eq!(extract_domain("http://github.com/tos"), "github.com");
+        assert_eq!(extract_domain("sub.domain.org/terms"), "sub.domain.org");
+    }
 }

@@ -18,7 +18,7 @@
             <div class="subtitle">Desktop Companion &amp; Local Inference Service</div>
           </div>
         </div>
-        <div class="status-pill">
+        <div class="status-pill" id="status-pill">
           <span class="pulse-dot"></span>
           <span id="service-status">Companion Active</span>
         </div>
@@ -49,7 +49,7 @@
             </div>
             <div class="metric-row">
               <span class="metric-label">API Health:</span>
-              <span class="metric-value status-good" id="api-health">Healthy</span>
+              <span class="metric-value status-good" id="api-health">Listening</span>
             </div>
             <div class="metric-row">
               <span class="metric-label">System Tray:</span>
@@ -69,8 +69,12 @@
               <span class="metric-value font-mono">Llama-3.2-3B-Instruct</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">Engine:</span>
-              <span class="metric-value">llama.cpp Sidecar</span>
+              <span class="metric-label">Model File:</span>
+              <span class="metric-value" id="model-status">Checking...</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">llama-server:</span>
+              <span class="metric-value" id="sidecar-status">Checking...</span>
             </div>
             <div class="metric-row">
               <span class="metric-label">Constraint:</span>
@@ -90,12 +94,12 @@
               <span class="metric-value">SQLite (Local)</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">CDN Sync:</span>
-              <span class="metric-value">jsDelivr (Lophostrix/crixata-cache)</span>
+              <span class="metric-label">Cached Policies:</span>
+              <span class="metric-value font-mono" id="cached-count">0</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">State:</span>
-              <span class="metric-value status-good">Synced</span>
+              <span class="metric-label">CDN Sync:</span>
+              <span class="metric-value">jsDelivr (crixata-cache)</span>
             </div>
           </div>
         </div>
@@ -111,11 +115,36 @@
             </p>
             <div class="extension-status">
               <span class="metric-label">Extension Bridge:</span>
-              <span class="metric-value status-good">Listening</span>
+              <span class="metric-value status-good">Active (Port 4343)</span>
             </div>
           </div>
         </div>
       </main>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-icon">📥</span>
+          <h3>Local Model &amp; Sidecar Download Manager</h3>
+        </div>
+        <div class="card-body">
+          <p class="card-desc">
+            To analyze policies locally, download the quantized Llama-3.2-3B-Instruct model (~2 GB) and the llama-server engine executable.
+          </p>
+          <div class="action-row">
+            <button id="download-model-btn" class="btn btn-primary">Download Model &amp; Engine</button>
+            <span id="download-summary" class="metric-label">Ready</span>
+          </div>
+          <div class="progress-section">
+            <div class="progress-container">
+              <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <div class="progress-labels">
+              <span id="progress-step">Awaiting trigger...</span>
+              <span id="progress-pct" class="font-mono">0%</span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section class="action-card card">
         <div class="card-header">

@@ -1,26 +1,140 @@
 pub mod cache;
 pub mod config;
 pub mod grade;
+pub mod llm;
 pub mod model;
 pub mod server;
 pub mod sidecar;
 pub mod sync;
 
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use tauri::Emitter;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::cache::CacheManager;
 use crate::config::AppConfig;
+use crate::model::ModelManager;
 use crate::server::start_local_server;
+use crate::sidecar::{SidecarManager, SidecarStatus};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressPayload {
+    pub percentage: f32,
+    pub status: String,
+    pub message: String,
+}
 
 #[tauri::command]
-fn get_app_status() -> serde_json::Value {
+fn get_app_status(
+    config: tauri::State<'_, AppConfig>,
+    cache: tauri::State<'_, Arc<CacheManager>>,
+    sidecar: tauri::State<'_, Arc<AsyncMutex<SidecarManager>>>,
+    model_manager: tauri::State<'_, Arc<ModelManager>>,
+) -> serde_json::Value {
+    let (sidecar_status, sidecar_ready) = match sidecar.try_lock() {
+        Ok(sc) => (sc.status(), sc.is_ready()),
+        Err(_) => (SidecarStatus::Starting, false),
+    };
+    let model_present = model_manager.is_model_present();
+    let sidecar_present = model_manager.is_sidecar_present();
+    let cached_count = cache.count_grades().unwrap_or(0);
+
     serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
-        "model": "Llama-3.2-3B-Instruct",
-        "zero_telemetry": true,
-        "local_api_port": 4343
+        "model": config.model_filename,
+        "model_present": model_present,
+        "sidecar_present": sidecar_present,
+        "sidecar_status": format!("{:?}", sidecar_status),
+        "sidecar_ready": sidecar_ready,
+        "local_api_port": config.server_port,
+        "llama_server_port": config.llama_server_port,
+        "cached_policies_count": cached_count,
+        "zero_telemetry": true
     })
+}
+
+#[tauri::command]
+fn get_download_status(
+    model_manager: tauri::State<'_, Arc<ModelManager>>,
+) -> serde_json::Value {
+    serde_json::to_value(model_manager.get_status()).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn download_model(
+    app: tauri::AppHandle,
+    model_manager: tauri::State<'_, Arc<ModelManager>>,
+    sidecar: tauri::State<'_, Arc<AsyncMutex<SidecarManager>>>,
+    config: tauri::State<'_, AppConfig>,
+) -> Result<(), String> {
+    let app_handle = app.clone();
+    let mm = Arc::clone(&model_manager);
+    let sc = Arc::clone(&sidecar);
+    let cfg = config.inner().clone();
+
+    tokio::spawn(async move {
+        let app_progress = app_handle.clone();
+        let res = mm
+            .download_all(move |pct, msg| {
+                let _ = app_progress.emit(
+                    "model-download-progress",
+                    ProgressPayload {
+                        percentage: pct,
+                        status: if pct >= 100.0 {
+                            "completed".into()
+                        } else {
+                            "downloading".into()
+                        },
+                        message: msg.to_string(),
+                    },
+                );
+            })
+            .await;
+
+        match res {
+            Ok(_) => {
+                let _ = app_handle.emit(
+                    "model-download-progress",
+                    ProgressPayload {
+                        percentage: 100.0,
+                        status: "completed".into(),
+                        message: "Download complete. Starting inference engine...".into(),
+                    },
+                );
+
+                // Update sidecar paths in case they were just downloaded
+                {
+                    if let Ok(mut sidecar_lock) = sc.try_lock() {
+                        sidecar_lock.update_paths(
+                            cfg.resolve_llama_server_bin(),
+                            cfg.model_path(),
+                        );
+                    }
+                }
+
+                // Attempt to start sidecar
+                let sc_start = Arc::clone(&sc);
+                tokio::spawn(async move {
+                    let mut lock = sc_start.lock().await;
+                    let _ = lock.start().await;
+                });
+            }
+            Err(e) => {
+                let _ = app_handle.emit(
+                    "model-download-progress",
+                    ProgressPayload {
+                        percentage: 0.0,
+                        status: "error".into(),
+                        message: format!("Download failed: {}", e),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,10 +145,35 @@ pub fn run() {
             .unwrap_or_else(|_| CacheManager::in_memory().expect("in-memory sqlite failed")),
     );
 
-    // Start local extension HTTP server
-    let _ = start_local_server(config.server_port, Arc::clone(&cache));
+    let model_manager = Arc::new(ModelManager::new(config.clone()));
 
-    tauri::Builder::default()
+    let sidecar = Arc::new(AsyncMutex::new(SidecarManager::new(
+        config.resolve_llama_server_bin(),
+        config.model_path(),
+        config.llama_server_port,
+    )));
+
+    // Start local extension HTTP server
+    let _ = start_local_server(
+        config.server_port,
+        config.llama_server_port,
+        Arc::clone(&cache),
+        Arc::clone(&sidecar),
+        Arc::clone(&model_manager),
+    );
+
+    // Auto-start sidecar only if model and sidecar binary are already present
+    if model_manager.is_model_present() && model_manager.is_sidecar_present() {
+        let sc_init = Arc::clone(&sidecar);
+        tauri::async_runtime::spawn(async move {
+            let mut lock = sc_init.lock().await;
+            let _ = lock.start().await;
+        });
+    }
+
+    let sidecar_for_exit = Arc::clone(&sidecar);
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -42,8 +181,11 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(config)
+        .manage(cache)
+        .manage(sidecar)
+        .manage(model_manager)
         .setup(|app| {
-            // Setup system tray
             #[cfg(desktop)]
             {
                 use tauri::tray::TrayIconBuilder;
@@ -54,7 +196,23 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_status])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![
+            get_app_status,
+            get_download_status,
+            download_model
+        ]);
+
+    builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                if let Ok(mut sc) = sidecar_for_exit.try_lock() {
+                    let _ = sc.stop();
+                } else {
+                    let mut sc = sidecar_for_exit.blocking_lock();
+                    let _ = sc.stop();
+                }
+            }
+        });
 }

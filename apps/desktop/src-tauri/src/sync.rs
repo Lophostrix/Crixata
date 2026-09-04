@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{CacheManager, CachedPolicyRecord};
+use crate::cache::CacheManager;
 use crate::grade::{Grade, PolicySummary};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,18 +66,17 @@ impl CacheSyncer {
 
         let mut inserted = 0;
         for item in shard.policies {
-            let record = CachedPolicyRecord {
-                domain: item.domain,
-                policy_url: item.policy_url,
-                policy_type: item.policy_type,
-                policy_version_hash: item.policy_version_hash,
-                grade: item.grade,
-                summary: item.summary,
-                graded_at: item.graded_at,
-                model_version: item.model_version,
-                source: item.source,
-            };
-            if cache.insert_policy(&record).is_ok() {
+            if cache
+                .upsert_grade(
+                    &item.domain,
+                    &item.policy_url,
+                    Some(&item.policy_version_hash),
+                    &item.grade.to_string(),
+                    &item.summary,
+                    &item.source,
+                )
+                .is_ok()
+            {
                 inserted += 1;
             }
         }

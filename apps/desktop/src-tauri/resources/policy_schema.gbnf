@@ -1,0 +1,13 @@
+root ::= PolicySummary
+
+PolicySummary ::= "{" ws "\"data_collected\":" ws string-list "," ws "\"data_used_for\":" ws string-list "," ws "\"shared_with_third_parties\":" ws boolean "," ws "\"third_party_details\":" ws string "," ws "\"retention_period\":" ws string "," ws "\"user_rights\":" ws user-rights "," ws "\"tracking_and_ads\":" ws string "," ws "\"arbitration_or_class_action_waiver\":" ws boolean "," ws "\"policy_clarity_notes\":" ws string ws "}"
+
+user-rights ::= "{" ws "\"can_delete_data\":" ws boolean "," ws "\"can_export_data\":" ws boolean "," ws "\"can_opt_out_of_tracking\":" ws boolean ws "}"
+
+string-list ::= "[" ws (string ("," ws string)*)? ws "]"
+
+boolean ::= "true" | "false"
+
+string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
+
+ws ::= [ \t\n\r]*
