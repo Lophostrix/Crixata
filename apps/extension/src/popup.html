@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crixata - AI Policy Grader</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --grade-a: #10b981;
+      --grade-b: #3b82f6;
+      --grade-c: #f59e0b;
+      --grade-d: #ef4444;
+      --grade-unknown: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      width: 380px;
+      min-height: 480px;
+      background-color: var(--bg);
+      color: var(--text-main);
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 12px;
+      margin-bottom: 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #6366f1, #10b981);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #fff;
+      font-size: 14px;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .companion-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #ef4444;
+    }
+
+    .status-dot.connected {
+      background-color: #10b981;
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .policy-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .domain-info {
+      overflow: hidden;
+    }
+
+    .domain-name {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .policy-type {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: capitalize;
+    }
+
+    .grade-badge {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+      background-color: var(--grade-unknown);
+      flex-shrink: 0;
+    }
+
+    .grade-badge.grade-A { background-color: var(--grade-a); }
+    .grade-badge.grade-B { background-color: var(--grade-b); }
+    .grade-badge.grade-C { background-color: var(--grade-c); }
+    .grade-badge.grade-D { background-color: var(--grade-d); }
+
+    .summary-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    .tag-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .tag {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #e2e8f0;
+    }
+
+    .rights-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .right-item {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 6px 4px;
+      text-align: center;
+      font-size: 10px;
+    }
+
+    .right-item .icon {
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .right-item.yes { border-color: rgba(16, 185, 129, 0.4); color: #10b981; }
+    .right-item.no { border-color: rgba(239, 68, 68, 0.4); color: #ef4444; }
+
+    .alert-box {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #fca5a5;
+      margin-top: 6px;
+    }
+
+    .notes-box {
+      font-size: 11px;
+      color: #cbd5e1;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 6px;
+      padding: 8px;
+      font-style: italic;
+    }
+
+    button.action-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: opacity 0.15s;
+    }
+
+    button.action-btn:hover {
+      opacity: 0.92;
+    }
+
+    button.action-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .disclaimer {
+      border-top: 1px solid var(--card-border);
+      padding-top: 10px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+    }
+
+    .disclaimer-icon {
+      color: #10b981;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-icon">C</div>
+      <div class="brand-title">Crixata</div>
+    </div>
+    <div class="companion-status">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">Checking Desktop...</span>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="policy-header">
+      <div class="domain-info">
+        <div id="domain-name" class="domain-name">Checking page...</div>
+        <div id="policy-type" class="policy-type">Scanning</div>
+      </div>
+      <div id="grade-badge" class="grade-badge">?</div>
+    </div>
+  </div>
+
+  <div id="summary-card" class="card summary-section" style="display: none;">
+    <div>
+      <div class="section-title">Data Collected</div>
+      <div id="data-collected" class="tag-container"></div>
+    </div>
+
+    <div>
+      <div class="section-title">Purposes & Sharing</div>
+      <div id="third-party-details" style="font-size: 11px; margin-bottom: 4px;"></div>
+      <div id="data-purposes" class="tag-container"></div>
+    </div>
+
+    <div>
+      <div class="section-title">User Privacy Rights</div>
+      <div class="rights-grid">
+        <div id="right-delete" class="right-item">
+          <div class="icon">🗑️</div>
+          <div>Deletion</div>
+        </div>
+        <div id="right-export" class="right-item">
+          <div class="icon">📦</div>
+          <div>Export</div>
+        </div>
+        <div id="right-optout" class="right-item">
+          <div class="icon">🚫</div>
+          <div>Opt-Out</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="arbitration-alert" class="alert-box" style="display: none;">
+      ⚠️ Policy contains mandatory arbitration or class-action waiver.
+    </div>
+
+    <div>
+      <div class="section-title">Clarity Assessment</div>
+      <div id="clarity-notes" class="notes-box"></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom: 12px;">
+    <button id="grade-btn" class="action-btn">
+      <span id="btn-text">Grade Current Page</span>
+    </button>
+  </div>
+
+  <div class="disclaimer">
+    <div class="disclaimer-icon">🔒</div>
+    <div>
+      <strong>Zero-Telemetry Guarantee:</strong> All analysis runs locally on your machine via the Crixata companion app. No browsing history, URLs, or policy contents are sent to external cloud servers.
+    </div>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>

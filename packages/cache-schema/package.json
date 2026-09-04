@@ -1,0 +1,32 @@
+{
+  "name": "@crixata/cache-schema",
+  "version": "0.1.0",
+  "description": "JSON schema and TypeScript definitions for Crixata policy cache shards",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./schema.json": "./schema.json",
+    "./types": {
+      "import": "./dist/types.js",
+      "types": "./dist/types.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "schema.json",
+    "types.ts",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2"
+  }
+}

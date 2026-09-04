@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crixata - Local-First AI Policy Grader</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="app-layout">
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-badge">C</div>
+          <div>
+            <h1>Crixata</h1>
+            <div class="subtitle">Desktop Companion &amp; Local Inference Service</div>
+          </div>
+        </div>
+        <div class="status-pill">
+          <span class="pulse-dot"></span>
+          <span id="service-status">Companion Active</span>
+        </div>
+      </header>
+
+      <section class="disclaimer-banner">
+        <div class="disclaimer-icon">🛡️</div>
+        <div class="disclaimer-content">
+          <h3>Zero-Telemetry Privacy Guarantee</h3>
+          <p>
+            Crixata performs all AI inferences strictly on your machine.
+            No personal data, browsing history, or policy documents are ever uploaded to cloud servers.
+            There are zero analytics, trackers, or telemetry in this software.
+          </p>
+        </div>
+      </section>
+
+      <main class="dashboard-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">⚡</span>
+            <h3>Service Status</h3>
+          </div>
+          <div class="card-body">
+            <div class="metric-row">
+              <span class="metric-label">Local HTTP API:</span>
+              <span class="metric-value font-mono" id="api-port">127.0.0.1:4343</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">API Health:</span>
+              <span class="metric-value status-good" id="api-health">Healthy</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">System Tray:</span>
+              <span class="metric-value">Active</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">🧠</span>
+            <h3>Inference Engine</h3>
+          </div>
+          <div class="card-body">
+            <div class="metric-row">
+              <span class="metric-label">Target Model:</span>
+              <span class="metric-value font-mono">Llama-3.2-3B-Instruct</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Engine:</span>
+              <span class="metric-value">llama.cpp Sidecar</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Constraint:</span>
+              <span class="metric-value font-mono">GBNF Strict Schema</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">🗄️</span>
+            <h3>Policy Cache</h3>
+          </div>
+          <div class="card-body">
+            <div class="metric-row">
+              <span class="metric-label">Storage:</span>
+              <span class="metric-value">SQLite (Local)</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">CDN Sync:</span>
+              <span class="metric-value">jsDelivr (Lophostrix/crixata-cache)</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">State:</span>
+              <span class="metric-value status-good">Synced</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">🧩</span>
+            <h3>Browser Extension</h3>
+          </div>
+          <div class="card-body">
+            <p class="card-desc">
+              Connect the Crixata Chrome Extension to receive instant A–D grading badges as you browse.
+            </p>
+            <div class="extension-status">
+              <span class="metric-label">Extension Bridge:</span>
+              <span class="metric-value status-good">Listening</span>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <section class="action-card card">
+        <div class="card-header">
+          <span class="card-icon">🔍</span>
+          <h3>Diagnostic Health Check</h3>
+        </div>
+        <div class="card-body">
+          <div class="action-row">
+            <button id="check-status-btn" class="btn btn-primary">Refresh Companion Diagnostics</button>
+            <span id="diagnostic-time" class="metric-label"></span>
+          </div>
+          <pre id="diagnostic-output" class="console-box">Ready. Click refresh to query native backend.</pre>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

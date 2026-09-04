@@ -1,0 +1,21 @@
+{
+  "name": "crixata",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crixata - Local-first AI Terms of Service and Privacy Policy Grader",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:desktop": "npm --workspace=apps/desktop run build",
+    "build:extension": "npm --workspace=apps/extension run build",
+    "build:cache-schema": "npm --workspace=packages/cache-schema run build",
+    "dev:desktop": "npm --workspace=apps/desktop run dev",
+    "dev:extension": "npm --workspace=apps/extension run dev",
+    "tauri": "npm --workspace=apps/desktop run tauri",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "packageManager": "npm@9.2.0"
+}

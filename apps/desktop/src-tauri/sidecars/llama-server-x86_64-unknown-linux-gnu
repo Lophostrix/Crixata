@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Crixata llama-server placeholder sidecar"
+exit 0

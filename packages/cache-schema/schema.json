@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://crixata.org/schemas/cache-shard-v1.json",
+  "title": "CrixataCacheShard",
+  "description": "Schema for a Crixata pre-graded policy cache shard",
+  "type": "object",
+  "required": [
+    "version",
+    "shard_id",
+    "updated_at",
+    "policies"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Cache schema specification version",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "shard_id": {
+      "type": "string",
+      "description": "Identifier for the shard partition (e.g. shard-001)"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this shard was last updated"
+    },
+    "policies": {
+      "type": "array",
+      "description": "Array of pre-graded policy records in this shard",
+      "items": {
+        "$ref": "#/definitions/PolicyRecord"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Grade": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Deterministic privacy grade based on policy rubric"
+    },
+    "PolicyType": {
+      "type": "string",
+      "enum": [
+        "privacy_policy",
+        "terms_of_service",
+        "cookie_policy",
+        "other"
+      ],
+      "description": "Type of legal document"
+    },
+    "GradeSource": {
+      "type": "string",
+      "enum": ["curated", "community", "llm"],
+      "description": "Source of the policy evaluation"
+    },
+    "UserRights": {
+      "type": "object",
+      "required": [
+        "can_delete_data",
+        "can_export_data",
+        "can_opt_out_of_tracking"
+      ],
+      "properties": {
+        "can_delete_data": {
+          "type": "boolean",
+          "description": "Whether the user has explicit right to request deletion of personal data"
+        },
+        "can_export_data": {
+          "type": "boolean",
+          "description": "Whether the user has explicit right to download/export personal data"
+        },
+        "can_opt_out_of_tracking": {
+          "type": "boolean",
+          "description": "Whether the user has explicit option to opt-out of behavioral tracking or third-party ads"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicySummary": {
+      "type": "object",
+      "required": [
+        "data_collected",
+        "data_used_for",
+        "shared_with_third_parties",
+        "third_party_details",
+        "retention_period",
+        "user_rights",
+        "tracking_and_ads",
+        "arbitration_or_class_action_waiver",
+        "policy_clarity_notes"
+      ],
+      "properties": {
+        "data_collected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Categories of personal data collected"
+        },
+        "data_used_for": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Purposes for which collected data is used"
+        },
+        "shared_with_third_parties": {
+          "type": "boolean",
+          "description": "Whether personal data is shared with or sold to third parties"
+        },
+        "third_party_details": {
+          "type": "string",
+          "description": "Details regarding third-party sharing or categories of recipients"
+        },
+        "retention_period": {
+          "type": "string",
+          "description": "Data retention duration or criteria stated in the policy"
+        },
+        "user_rights": {
+          "$ref": "#/definitions/UserRights"
+        },
+        "tracking_and_ads": {
+          "type": "string",
+          "description": "Information about cookies, web beacons, and advertising trackers"
+        },
+        "arbitration_or_class_action_waiver": {
+          "type": "boolean",
+          "description": "Whether the policy contains mandatory arbitration or class-action waiver clauses"
+        },
+        "policy_clarity_notes": {
+          "type": "string",
+          "description": "Readability and transparency assessment of the policy text"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyRecord": {
+      "type": "object",
+      "required": [
+        "domain",
+        "policy_url",
+        "policy_type",
+        "policy_version_hash",
+        "grade",
+        "summary",
+        "graded_at",
+        "model_version",
+        "source"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Normalized root domain (e.g. example.com)"
+        },
+        "policy_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical URL of the policy"
+        },
+        "policy_type": {
+          "$ref": "#/definitions/PolicyType"
+        },
+        "policy_version_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hash of normalized policy text"
+        },
+        "grade": {
+          "$ref": "#/definitions/Grade"
+        },
+        "summary": {
+          "$ref": "#/definitions/PolicySummary"
+        },
+        "graded_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when evaluation took place"
+        },
+        "model_version": {
+          "type": "string",
+          "description": "SLM or heuristic model version used"
+        },
+        "source": {
+          "$ref": "#/definitions/GradeSource"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
