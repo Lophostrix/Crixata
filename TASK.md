@@ -1,89 +1,130 @@
-# Current Task: Initialize Crixata MVP Scaffold
+# Current Task: Implement Core Rust Backend
 
 ## Goal
-Set up the foundational codebase for Crixata v2:
-1. Initialize a Tauri v2 desktop app in `apps/desktop/`.
-2. Scaffold a Chrome Manifest V3 extension in `apps/extension/`.
-3. Create the cache-schema package in `packages/cache-schema/`.
-4. Configure the monorepo build/workspace files.
+Make the Crixata Tauri desktop app functional as a local server that can receive policy text from the extension, grade it (using a local SLM), and cache results in SQLite. This task focuses on the Rust backend and a minimal working frontend.
 
 ## Context
-Crixata is a free, local-first, open-source AI ToS/Privacy Policy grader. The MVP uses:
-- Tauri v2 (Rust backend, lightweight web frontend)
-- llama.cpp `llama-server` sidecar (to be bundled later)
-- Chrome MV3 extension
-- Local SQLite cache
-- Public cache synced from jsDelivr CDN
-
-Read `docs/PRD.md` and `docs/ARCHITECTURE.md` for the full plan.
+- Project root: `/home/honeysh/projects/Crixata`
+- Desktop app: `apps/desktop/`
+- Docs: `docs/PRD.md`, `docs/ARCHITECTURE.md`
+- Extension will be implemented in a later task.
 
 ## Requirements
 
-### 1. Tauri v2 app (`apps/desktop/`)
-- Use `npm create tauri-app@latest` or the cargo equivalent.
-- Target a vanilla TS + Vite frontend (no heavy framework).
-- Add required Tauri plugins:
-  - `tauri-plugin-autostart`
-  - `tauri-plugin-positioner` (optional but useful for tray)
-  - `tauri-plugin-shell` or `tauri-plugin-process` for sidecar management
-  - `tauri-plugin-http` for extension API (or use custom Rust commands + tiny_http/axum)
-- Configure `tauri.conf.json`:
-  - App name: "Crixata"
-  - Identifier: `com.lophostrix.crixata`
-  - Sidecar support enabled with a placeholder `llama-server` target triple.
-  - System tray enabled.
-- Add Rust crates:
-  - `rusqlite` for SQLite
-  - `serde`, `serde_json`, `tokio`, `reqwest`, `anyhow`, `thiserror`
-  - `tauri-plugin-autostart`
-  - `tauri-plugin-positioner`
-  - `tauri-plugin-shell` (if used)
-- Rust backend modules (create empty skeleton files):
-  - `src/sidecar.rs` — manages llama-server lifecycle
-  - `src/cache.rs` — SQLite cache operations
-  - `src/sync.rs` — jsDelivr cache sync
-  - `src/grade.rs` — grading logic
-  - `src/model.rs` — model download manager
-  - `src/server.rs` — local HTTP server for extension (if not using Tauri commands)
-  - `src/config.rs` — app configuration
-- Frontend pages:
-  - `index.html` — main setup/status window
-  - `src/main.ts` with a status view
-  - Privacy disclaimer shown prominently.
+### 1. Configuration (`apps/desktop/src-tauri/src/config.rs`)
+- Define `AppConfig` with methods returning:
+  - `cache_db_path()` — SQLite path in app data dir.
+  - `model_dir()` — directory for the downloaded GGUF model.
+  - `model_path()` — path to `Llama-3.2-3B-Instruct.Q4_K_M.gguf`.
+  - `llama_server_bin_path()` — path to downloaded `llama-server` executable.
+  - `server_port` and `llama_server_port` defaults (e.g., 4343 and 4344).
+- Use `dirs::data_dir()` / `dirs::data_local_dir()` for cross-platform paths.
+- Create directories on first use.
 
-### 2. Chrome MV3 extension (`apps/extension/`)
-- `manifest.json` version 3 with:
-  - `host_permissions`: `<all_urls>`
-  - `permissions`: `activeTab`, `scripting`, `storage`, `tabs`
-  - `action` popup
-  - `background.service_worker`
-  - `content_scripts` for all URLs
-- Files:
-  - `src/background.ts` — listens to tab updates, detects policy pages
-  - `src/content.ts` — extracts page text
-  - `src/popup.html` / `src/popup.ts` — shows grade, summary, disclaimer
-  - `src/api.ts` — client for the Tauri local HTTP API
-  - `src/detector.ts` — URL/title/link heuristics for policy pages
-  - `src/badge.ts` — badge update helpers
-- Build with Vite or plain `tsc`.
+### 2. Model Download Manager (`apps/desktop/src-tauri/src/model.rs`)
+- Implement `ModelManager` that can:
+  - Check whether the model file exists locally.
+  - Download the GGUF model from Hugging Face with progress reporting:
+    - URL: `https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf`
+    - (Accept a model URL config option; the above is the default.)
+  - Report download progress as percentage.
+  - Resume interrupted downloads if possible (range requests optional; nice-to-have).
+  - Download the appropriate pre-compiled `llama-server` binary from the official llama.cpp releases on GitHub into the app data dir, based on target triple:
+    - Linux x86_64: `llama-server-x86_64-unknown-linux-gnu`
+    - Linux aarch64: `llama-server-aarch64-unknown-linux-gnu`
+    - macOS x86_64: `llama-server-x86_64-apple-darwin`
+    - macOS aarch64: `llama-server-aarch64-apple-darwin`
+    - Windows x86_64: `llama-server-x86_64-pc-windows-msvc.exe`
+    - Map target triple to a release asset URL.
+    - Mark the binary executable on Unix.
 
-### 3. Cache schema package (`packages/cache-schema/`)
-- `schema.json` — JSON Schema for a cache shard.
-- `types.ts` — TypeScript types mirroring the schema.
-- Example shard in `examples/shard-v1.json`.
+### 3. Sidecar Manager (`apps/desktop/src-tauri/src/sidecar.rs`)
+- Rewrite `SidecarManager` to:
+  - Spawn `llama-server` using `std::process::Command` (not Tauri sidecar feature for now).
+  - Args: `-m <model_path> --port <port> -c 4096 --host 127.0.0.1`
+  - Wait for `/health` endpoint to respond before marking `Ready`.
+  - Stop/kill the process on app exit.
+  - Restart on failure up to a max retry count.
+- Keep health-check logic.
 
-### 4. Monorepo/workspace
-- Add `package.json` at repo root with workspaces or just scripts to build both apps.
-- Add a root `README.md` update linking to apps/packages.
-- Keep committed files buildable: do not commit node_modules or target dirs.
+### 4. SQLite Cache (`apps/desktop/src-tauri/src/cache.rs`)
+- Schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS grades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL,
+      policy_url TEXT NOT NULL,
+      policy_hash TEXT,
+      grade TEXT NOT NULL,
+      summary_json TEXT NOT NULL,
+      source TEXT NOT NULL, -- 'llm' or 'cache'
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(domain, policy_url)
+  );
+  CREATE INDEX IF NOT EXISTS idx_domain ON grades(domain);
+  ```
+- Implement:
+  - `CacheManager::open(path)` / `CacheManager::in_memory()`.
+  - `get_grade(domain, policy_url)` → optional grade record.
+  - `upsert_grade(domain, policy_url, policy_hash, grade, summary, source)`.
+  - `list_recent(limit)`.
+
+### 5. Local HTTP Server (`apps/desktop/src-tauri/src/server.rs`)
+- Use `tiny_http`.
+- Endpoints:
+  - `GET /health` → JSON `{ "status": "ok", "sidecar_ready": bool, "model_downloaded": bool }`.
+  - `POST /grade` → accepts `{ "url", "title", "text" }`, returns grade response.
+- `/grade` flow:
+  1. Validate `url` and `text` are non-empty.
+  2. Derive domain from URL.
+  3. Check cache; return cached result if found.
+  4. If not cached and sidecar is ready, call the LLM extraction function.
+  5. Compute grade from extracted summary.
+  6. Store in cache and return.
+- CORS: allow `chrome-extension://*` origins.
+
+### 6. LLM Extraction Stub (`apps/desktop/src-tauri/src/llm.rs` — new file)
+- Define the strict extraction schema types.
+- Implement `extract_policy_summary(text: &str, client: &reqwest::Client, port: u16) -> Result<Summary>`.
+- For now, implement the prompt and call `/completion` on the local llama-server.
+- Use a GBNF grammar string passed in the request body (`grammar` field) to constrain output.
+- If the sidecar is not ready or model is missing, return a clear error.
+- The actual GBNF grammar file can live at `apps/desktop/src-tauri/resources/policy_schema.gbnf`.
+
+### 7. Grading Logic (`apps/desktop/src-tauri/src/grade.rs`)
+- Define `Summary` struct matching the JSON schema in `docs/ARCHITECTURE.md`.
+- Implement `compute_grade(summary: &Summary) -> char` with the rubric from the architecture doc.
+- Grade is deterministic based on extracted fields.
+
+### 8. Wiring (`apps/desktop/src-tauri/src/lib.rs`)
+- Construct config, cache, sidecar manager, and start the local server.
+- Add Tauri commands:
+  - `get_app_status()`
+  - `download_model()` with progress events (emit `model-download-progress` events).
+  - `get_download_status()`
+- Ensure the sidecar is started only after the model exists (or at least model file is present).
+- On app shutdown, stop the sidecar.
+
+### 9. Minimal Frontend (`apps/desktop/src/`)
+- Show the privacy disclaimer.
+- Show app status (sidecar, model, cache).
+- Button to trigger model download with progress bar.
+- Display the local API port.
+
+### 10. Build Verification
+- `cd apps/desktop && npm run tauri dev` must compile and start without errors.
+- If `llama-server` or model is missing, the app should gracefully show download UI instead of crashing.
+- `cargo check` should pass.
 
 ## Deliverables
-- `apps/desktop/` builds with `cargo tauri dev` without errors (even if UI is minimal).
-- `apps/extension/` loads in Chrome as an unpacked extension.
-- `packages/cache-schema/` has valid JSON Schema and example.
-- All changes committed and pushed to `origin/main`.
+- All Rust modules implemented and compiling.
+- Frontend status/download page functional.
+- Local HTTP server responds to `/health`.
+- Commit and push to `origin/main`.
 
 ## Notes
-- Do not implement the full logic yet; skeletons and correct wiring are enough.
-- Use `npm` or `pnpm`; pick one and document it.
-- Do not bundle the actual GGUF model or llama-server binary yet; leave placeholders/config only.
+- Do **not** commit the downloaded `llama-server` binary or GGUF model.
+- Do **not** implement the browser extension yet; only the desktop backend.
+- Use the existing skeleton files where they exist; rewrite if needed.
+- Keep error handling explicit with `anyhow`/`thiserror`.
