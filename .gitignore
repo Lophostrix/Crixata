@@ -19,15 +19,22 @@ yarn-error.log*
 
 # Rust
 target/
+**/target/
 Cargo.lock
 **/*.rs.bk
 
 # Tauri
 dist/
+**/dist/
 *.app
 *.dmg
 *.exe
 *.msi
+
+# Sidecar binaries (downloaded at build time)
+apps/desktop/src-tauri/sidecars/llama-server-*
+!apps/desktop/src-tauri/sidecars/.gitkeep
+!apps/desktop/src-tauri/sidecars/README.md
 
 # Model files
 *.gguf

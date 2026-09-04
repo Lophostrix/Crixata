@@ -1,0 +1,8 @@
+# Placeholder
+
+Download the official pre-compiled `llama-server` binary for your target triple and place it here as `llama-server-<target>` before building.
+
+Example for Linux x86_64:
+  llama-server-x86_64-unknown-linux-gnu
+
+Tauri `externalBin` expects the binary name plus the target triple suffix. The build script or CI will fetch the correct binary.
