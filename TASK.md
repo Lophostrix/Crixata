@@ -1,112 +1,116 @@
-# Current Task: Implement Chrome MV3 Extension
+# Current Task: Implement Cache Sync from jsDelivr CDN
 
 ## Goal
-Build a complete Chrome Manifest V3 extension that detects ToS/Privacy Policy pages, extracts policy text, calls the local Crixata desktop app API, and displays the grade in the toolbar badge and popup.
+Add a public pre-graded policy cache sync mechanism to the Crixata desktop app. The app should periodically fetch JSON shards from a jsDelivr-backed GitHub repo and merge them into the local SQLite cache.
 
 ## Context
 - Project root: `/home/honeysh/projects/Crixata`
-- Extension location: `apps/extension/`
-- Desktop app local API: `http://127.0.0.1:4343`
-- API endpoints: `GET /health`, `POST /grade`
-- Docs: `docs/PRD.md`, `docs/ARCHITECTURE.md`
+- Desktop app: `apps/desktop/`
+- Cache schema package: `packages/cache-schema/`
+- Base URL configured in `config.rs`: `https://cdn.jsdelivr.net/gh/Lophostrix/crixata-cache@main/shards`
+- The public cache repo is `Lophostrix/crixata-cache`. It does not exist yet; we will create a sample shard file in this repo for testing.
 
 ## Requirements
 
-### 1. Fix Manifest and Build Layout
-- Update `apps/extension/manifest.json` to reference built files at the root of `dist/` (not `src/`):
-  - `"default_popup": "popup.html"`
-  - `"service_worker": "background.js"`
-  - content script: `"js": ["content.js"]`
-- Update `apps/extension/vite.config.ts` so the build outputs:
-  - `dist/popup.html`
-  - `dist/background.js`
-  - `dist/content.js`
-  - `dist/icons/` copied from `apps/extension/icons/`
-  - `dist/manifest.json` copied from `apps/extension/manifest.json`
-  - CSS/JS assets under `dist/assets/` or similar.
-- Add a `copy-manifest-and-icons` npm script or use a Vite plugin to copy statics.
+### 1. Cache Shard Schema (`packages/cache-schema/`)
+Update the schema and types to define a cache shard:
 
-### 2. Policy Detection (`src/detector.ts`)
-Implement heuristics to decide whether a page is a Terms of Service or Privacy Policy page.
-
-Check in order:
-- URL path contains one of: `privacy`, `privacypolicy`, `privacy-policy`, `tos`, `terms`, `terms-of-service`, `terms-of-use`, `legal`, `eula`, `user-agreement`, `conditions`.
-- Page `<title>` contains: `Privacy Policy`, `Terms of Service`, `Terms of Use`, `Terms and Conditions`, `Legal`, `Cookie Policy`.
-- DOM: look for links on the page whose text or href matches the above keywords (use a content script message to get these).
-
-Return a confidence object:
-```ts
-interface DetectionResult {
-  isPolicyPage: boolean;
-  policyType: 'privacy' | 'terms' | 'cookie' | 'unknown';
-  confidence: 'high' | 'medium' | 'low';
+```json
+{
+  "version": 1,
+  "updated_at": "2026-09-04T12:00:00Z",
+  "shards": [
+    {
+      "domain": "example.com",
+      "policy_url": "https://example.com/privacy",
+      "policy_hash": "sha256-or-text-hash",
+      "grade": "B",
+      "summary": { /* same Summary object */ },
+      "source": "cache",
+      "graded_at": "2026-09-04T12:00:00Z"
+    }
+  ]
 }
 ```
 
-### 3. Content Script (`src/content.ts`)
-- Extract the main readable text from the page body.
-- Remove script/style/nav/footer/header/aside elements where appropriate.
-- Trim and limit text to ~15,000 characters (send the first N chars if longer).
-- Listen for messages from the service worker:
-  - `action: "extract-text"` → returns `{ text: string, title: string, url: string }`.
-  - `action: "scan-links"` → returns candidate policy links found in the page.
+- Update `schema.json` to validate this structure.
+- Update `types.ts` accordingly.
+- Add a JSON Schema for individual shard files (e.g., `shard.schema.json`).
+- Add sample `examples/shard-v1.json`.
 
-### 4. Service Worker (`src/background.ts`)
-- On tab update (`chrome.tabs.onUpdated`), when status is `complete`:
-  - Use `chrome.scripting.executeScript` to call the content script and detect/scan.
-  - If a policy page is detected, extract text.
-  - Call `GET http://127.0.0.1:4343/health`.
-  - If desktop app is healthy, call `POST http://127.0.0.1:4343/grade` with `{ url, title, text }`.
-  - Update the tab's badge with the grade (A/B/C/D) and a badge color:
-    - A → green (`#22c55e`)
-    - B → blue (`#3b82f6`)
-    - C → orange (`#f97316`)
-    - D → red (`#ef4444`)
-    - Unknown / error / no app → gray (`#6b7280`) or "?"
-- Store the last grade result per tab in `chrome.storage.session` (or `local` if session unavailable) so the popup can read it instantly.
-- Throttle: do not re-grade the same URL more than once per 5 minutes unless the user clicks the popup.
+### 2. Cache Sync in Rust (`apps/desktop/src-tauri/src/sync.rs`)
+Implement:
 
-### 5. Popup (`src/popup.html`, `src/popup.ts`, `src/popup.css`)
-- Query the active tab's stored grade result.
-- Display:
-  - Large grade badge (A/B/C/D/?).
-  - Domain / policy URL.
-  - Summary breakdown: data collected, data used for, third-party sharing, retention, user rights, tracking/ads, arbitration/class-action waiver, clarity notes.
-  - Source label: "Analyzed locally" or "From cache".
-  - A prominent privacy disclaimer: *"No user data, browsing history, or policy content is ever tracked, collected, or sent to a remote server."*
-- Show a "Desktop app not running" state if `/health` fails, with instructions to launch Crixata.
-- Add a "Re-analyze this page" button.
+- `CacheSync` struct with:
+  - `base_url: String`
+  - `client: reqwest::Client`
+  - `cache: Arc<CacheManager>`
+- `CacheSync::new(config, cache)`.
+- `CacheSync::sync_all() -> Result<SyncReport>`:
+  1. Fetch `index.json` from `${base_url}/index.json`.
+  2. The index lists available shard filenames, e.g.:
+     ```json
+     { "shards": ["shard-000.json", "shard-001.json"] }
+     ```
+  3. For each shard file, fetch `${base_url}/${filename}`.
+  4. Validate the JSON matches the schema (structurally via serde; full JSON Schema validation is optional).
+  5. Merge each shard entry into SQLite using `CacheManager::upsert_grade`.
+  6. Return a `SyncReport` with counts: `shards_fetched`, `entries_added`, `entries_updated`, `errors`.
+- `CacheSync::sync_shard(url) -> Result<usize>` for fetching a single shard.
+- Add rate limiting / politeness: do not hammer jsDelivr; sequential fetches with a small delay are fine.
 
-### 6. API Client (`src/api.ts`)
-- Strongly typed functions:
-  - `checkHealth(): Promise<HealthResponse>`
-  - `gradePolicy(req: GradeRequest): Promise<GradeResponse>`
-- Handle network errors gracefully (app not running).
+### 3. SQLite Cache Updates (`apps/desktop/src-tauri/src/cache.rs`)
+Ensure `upsert_grade` can receive cache entries. Add a method if needed:
+- `upsert_cache_entry(domain, policy_url, policy_hash, grade, summary, source, graded_at)`
 
-### 7. Badge Helper (`src/badge.ts`)
-- `setBadge(tabId, grade)` updates badge text and color.
-- `clearBadge(tabId)` resets to "?" or empty.
+Also add:
+- `get_last_sync_time() -> Option<DateTime<Utc>>` stored in a new `metadata` table.
+- `set_last_sync_time()`.
 
-### 8. Type Safety
-- Use types from `packages/cache-schema/types.ts` for `Summary`.
-- Add local `src/types.ts` for extension-specific types.
+Schema addition:
+```sql
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+```
 
-### 9. Build and Load Verification
-- `npm run build` in `apps/extension/` must produce a valid `dist/` folder.
-- The extension must be loadable in Chrome as an unpacked extension from `dist/`.
-- No TypeScript errors.
+### 4. Scheduler
+In `lib.rs`, spawn a background tokio task that runs sync every 24 hours (configurable). Only run sync if the app is online and the base URL is reachable. Do not block startup.
 
-### 10. Privacy Disclaimer
-- Must be visible in the popup.
-- Must not initiate any network requests except to `127.0.0.1:4343` and to fetch the current page's text.
+### 5. Tauri Commands
+Add commands:
+- `trigger_cache_sync()` → starts a sync and returns a summary when complete.
+- `get_last_sync_status()` → returns last sync time and counts.
+
+### 6. Frontend Updates
+Add to the desktop app UI:
+- Button "Sync Policy Cache Now".
+- Display last sync time and counts.
+- Show sync errors if any.
+
+### 7. Public Cache Repo Sample
+Create `cache-repo/` in the project root as a stand-in for `Lophostrix/crixata-cache`:
+- `cache-repo/README.md`
+- `cache-repo/shards/index.json`
+- `cache-repo/shards/shard-000.json` with 2-3 sample pre-graded policies (use realistic domains like `mozilla.org`, `wikipedia.org`, or `duckduckgo.com`).
+
+This folder represents the source for the public cache repo and can later be pushed to `Lophostrix/crixata-cache`.
+
+### 8. Verification
+- `cargo test` passes.
+- `cargo check` passes.
+- Unit tests for sync parsing and cache metadata.
 
 ## Deliverables
-- Complete extension source under `apps/extension/src/`.
-- Valid `apps/extension/manifest.json`.
-- Working Vite build that produces a loadable `dist/`.
+- Updated `packages/cache-schema/` with shard schema/types and sample.
+- Implemented `sync.rs` and scheduler in the desktop app.
+- Local cache metadata support in `cache.rs`.
+- Frontend sync UI.
+- `cache-repo/` sample stand-in.
 - Commit and push to `origin/main`.
 
 ## Notes
-- Do not implement the cache-sync backend in this task; only the extension.
-- Keep the popup lightweight; it should read from storage, not re-call the API on every open.
-- Handle MV3 service worker lifecycle: global state will be lost, so rely on `chrome.storage`.
+- Only jsDelivr/GitHub CDN network calls are allowed; no other remote endpoints.
+- Keep shard files small (< 1 MB each) so they are easy to host and download.
+- This task does not require the actual `Lophostrix/crixata-cache` repo to exist yet.
